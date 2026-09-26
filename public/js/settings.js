@@ -5,9 +5,9 @@ const KEY = 'brbc2';
 export const ACTIONS = [
   ['forward', 'İleri', 'KeyW'], ['back', 'Geri', 'KeyS'], ['left', 'Sola', 'KeyA'], ['right', 'Sağa', 'KeyD'],
   ['sprint', 'Koş · dürbünde nefes tut', 'ShiftLeft'], ['crouch', 'Çömel', 'KeyC'], ['jump', 'Zıpla', 'Space'],
-  ['leanL', 'Sola eğil', 'KeyQ'], ['leanR', 'Sağa eğil', 'KeyE'], ['reload', 'Şarjör değiştir', 'KeyR'],
-  ['mode', 'Atış modu', 'KeyB'], ['nade', 'El bombası (basılı tut: beklet)', 'KeyG'], ['use', 'Kutu aç · silah al', 'KeyF'],
-  ['flash', 'Fener', 'KeyT'], ['inspect', 'Silahı incele', 'KeyV'], ['slot1', 'Birincil silah', 'Digit1'],
+  ['leanL', 'Sola eğil', 'KeyZ'], ['leanR', 'Sağa eğil', 'KeyX'], ['reload', 'Şarjör değiştir', 'KeyR'],
+  ['mode', 'Atış modu', 'KeyB'], ['nade', 'El bombası (basılı tut: beklet)', 'KeyG'], ['use', 'Kullan: sandık aç · silah al · otomat', 'KeyE'],
+  ['flash', 'Fener', 'KeyT'], ['inspect', 'Silahı / bıçağı incele', 'KeyF'], ['slot1', 'Birincil silah', 'Digit1'],
   ['slot2', 'İkincil silah', 'Digit2'], ['slot3', 'Bıçak', 'Digit3'], ['score', 'Skor tablosu', 'Tab'],
 ];
 // fixed secondary keys that always work in addition to the binding
@@ -23,12 +23,24 @@ export function keyLabel(code) {
   return map[code] || code.replace('Arrow', '').toUpperCase();
 }
 
+// crosshair (Valorant-style editor): lines, center dot, outline, color, dynamic spread
+export const XH_DEFAULT = { show: true, color: '#ffffff', outline: true, olTh: 1, olA: 0.65, dot: true, dotSize: 2, dotA: 1, lines: true, len: 6, th: 2, gap: 4, lineA: 1, dynamic: true, tstyle: false };
+export const XH_PRESETS = [
+  ['Varsayılan', {}],
+  ['Klasik CS', { color: '#4dff5e', dot: false, len: 8, th: 2, gap: 3, olA: 0.8 }],
+  ['Keskin', { color: '#5ef2ff', dot: false, len: 4, th: 2, gap: 2, dynamic: false, olA: 0.5 }],
+  ['Nokta', { lines: false, dotSize: 4, olA: 0.8 }],
+  ['T-şekli', { tstyle: true, dot: false, len: 7, gap: 4 }],
+  ['Büyük artı', { len: 10, th: 3, gap: 6, dot: false, color: '#ffe14d' }],
+];
+const XH_OLD_COLORS = { white: '#ffffff', green: '#6dff7a', cyan: '#5ef2ff', red: '#ff4b4b', yellow: '#ffe14d' };
+
 export const DEFAULTS = {
-  name: 'Gezgin', sens: 1, adsSens: 1, rawInput: true, invertY: false, holdAds: true, holdCrouch: true, xhair: true, xstyle: 'cross', xcolor: 'white', hitmarks: true,
+  name: 'Gezgin', sens: 1, adsSens: 1, rawInput: true, invertY: false, holdAds: true, holdCrouch: true, xh: { ...XH_DEFAULT }, hitmarks: true,
   quality: 1, fov: 80, lens: 1, shake: 1, blur: true, bright: 1, fps: false,
   master: 0.8, sfx: 1, amb: 0.8, ui: 0.9, hrtf: true,
   bots: 6, diff: 1, frags: 20, time: 10, mode: 'ffa', light: 'normal',
-  binds: DEFAULT_BINDS,
+  binds: DEFAULT_BINDS, bindsV: 2,
 };
 
 function load() {
@@ -38,7 +50,20 @@ function load() {
   const s = { ...DEFAULTS };
   for (const k of Object.keys(DEFAULTS)) if (saved[k] != null && typeof saved[k] === typeof DEFAULTS[k]) s[k] = saved[k];
   s.binds = { ...DEFAULT_BINDS, ...(saved.binds && typeof saved.binds === 'object' ? saved.binds : {}) };
-  if (saved.xhair === false && saved.xstyle == null) s.xstyle = 'off'; // older saves: the dot could be turned off
+  // v2 layout (CS style): E use, F inspect, lean moved to Z / X. Keys still on the old defaults move along.
+  if (saved.binds && saved.bindsV !== 2) {
+    const OLD = { use: 'KeyF', inspect: 'KeyV', leanL: 'KeyQ', leanR: 'KeyE' };
+    for (const [a, k] of Object.entries(OLD)) if (s.binds[a] === k) s.binds[a] = DEFAULT_BINDS[a];
+    // a custom key that now collides with a moved default gives way to it
+    for (const a of Object.keys(OLD)) for (const b of Object.keys(s.binds)) if (b !== a && s.binds[b] === s.binds[a] && !(b in OLD)) s.binds[b] = saved.binds[a] || '';
+  }
+  s.bindsV = 2;
+  s.xh = { ...XH_DEFAULT, ...(saved.xh && typeof saved.xh === 'object' ? saved.xh : {}) };
+  if (!saved.xh) { // settings from before the editor
+    if (saved.xstyle === 'off' || saved.xhair === false) s.xh.show = false;
+    if (saved.xstyle === 'dot') s.xh.lines = false;
+    if (XH_OLD_COLORS[saved.xcolor]) s.xh.color = XH_OLD_COLORS[saved.xcolor];
+  }
   return s;
 }
 export const settings = load();
@@ -55,8 +80,6 @@ const SCHEMA = [
       { k: 'invertY', label: 'Y eksenini ters çevir', type: 'check' },
       { k: 'holdAds', label: 'Nişan alma (sağ tık)', type: 'select', opts: [[true, 'Basılı tut'], [false, 'Aç / kapat']] },
       { k: 'holdCrouch', label: 'Çömelme', type: 'select', opts: [[true, 'Basılı tut'], [false, 'Aç / kapat']] },
-      { k: 'xstyle', label: 'Nişangah', type: 'select', opts: [['cross', 'Artı (isabete göre açılır)'], ['dot', 'Nokta'], ['off', 'Kapalı']] },
-      { k: 'xcolor', label: 'Nişangah rengi', type: 'select', opts: [['white', 'Beyaz'], ['green', 'Yeşil'], ['cyan', 'Camgöbeği'], ['red', 'Kırmızı'], ['yellow', 'Sarı']] },
       { k: 'hitmarks', label: 'Vuruş işaretleri', type: 'check' },
     ],
   },
@@ -80,8 +103,96 @@ const SCHEMA = [
       { k: 'hrtf', label: '3D kulaklık sesi (HRTF)', type: 'check', hint: 'Kulaklıkla adım ve atış yönünü çok daha net duyarsın.' },
     ],
   },
+  { tab: 'NİŞANGAH', crosshair: true },
   { tab: 'KONTROLLER', controls: true },
 ];
+
+// Applies crosshair settings to a `.xh` element (the HUD one and the editor preview share this).
+export function styleCrosshair(el, xh, gap = xh.gap) {
+  const st = el.style, half = (v) => `${-Math.floor(v / 2)}px`;
+  st.setProperty('--xc', xh.color);
+  st.setProperty('--len', `${xh.len}px`); st.setProperty('--th', `${xh.th}px`); st.setProperty('--thh', half(xh.th));
+  st.setProperty('--gap', `${gap}px`);
+  st.setProperty('--la', xh.lines ? xh.lineA : 0);
+  st.setProperty('--dot', `${xh.dotSize}px`); st.setProperty('--doth', half(xh.dotSize)); st.setProperty('--da', xh.dot ? xh.dotA : 0);
+  st.setProperty('--ol', xh.outline ? `${xh.olTh}px` : '0px'); st.setProperty('--ola', xh.olA);
+  el.classList.toggle('tstyle', !!xh.tstyle);
+}
+
+// Crosshair editor: live preview on switchable backgrounds, presets and every parameter.
+function buildCrosshairEditor(page, onChange) {
+  page.innerHTML = '';
+  const xh = settings.xh;
+  const prev = document.createElement('div'); prev.className = 'xhprev wall';
+  prev.innerHTML = '<div class="xh"><i></i><i></i><i></i><i></i><b></b></div><div class="bgs"><button type="button" data-bg="wall">DUVAR</button><button type="button" data-bg="dark">KARANLIK</button><button type="button" data-bg="carpet">HALI</button></div>';
+  const xel = prev.querySelector('.xh');
+  prev.querySelectorAll('[data-bg]').forEach((b) => { b.onclick = () => { prev.className = 'xhprev ' + b.dataset.bg; }; });
+  page.appendChild(prev);
+  // with "dynamic" on, the preview breathes the way it opens while moving and firing
+  let t0 = performance.now();
+  const tick = () => {
+    if (!page.isConnected) return;
+    if (page.offsetParent !== null) styleCrosshair(xel, xh, xh.gap + (xh.dynamic ? (Math.sin((performance.now() - t0) / 450) * 0.5 + 0.5) * 10 : 0));
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  const presets = document.createElement('div'); presets.className = 'xhpresets';
+  page.appendChild(presets);
+  const rows = document.createElement('div'); page.appendChild(rows);
+  const changed = (rebuild) => { saveSettings(); onChange('xh'); t0 = performance.now(); if (rebuild) render(); };
+  for (const [name, p] of XH_PRESETS) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost small'; b.textContent = name;
+    b.onclick = () => { Object.assign(xh, XH_DEFAULT, p); changed(true); };
+    presets.appendChild(b);
+  }
+  const check = (k, label) => {
+    const row = document.createElement('label'); row.className = 'row';
+    row.innerHTML = `<span class="lab">${label}</span>`;
+    const i = document.createElement('input'); i.type = 'checkbox'; i.checked = !!xh[k]; i.dataset.k = 'xh.' + k;
+    i.onchange = () => { xh[k] = i.checked; changed(); };
+    row.appendChild(i); rows.appendChild(row);
+  };
+  const range = (k, label, min, max, step, fmt) => {
+    const row = document.createElement('label'); row.className = 'row sub';
+    row.innerHTML = `<span class="lab">${label}</span>`;
+    const i = document.createElement('input'); i.type = 'range'; i.min = min; i.max = max; i.step = step; i.value = xh[k]; i.dataset.k = 'xh.' + k;
+    const out = document.createElement('span'); out.className = 'val'; out.textContent = fmt(xh[k]);
+    i.oninput = () => { xh[k] = +i.value; out.textContent = fmt(xh[k]); changed(); };
+    row.append(i, out); rows.appendChild(row);
+  };
+  const pct = (v) => `${Math.round(v * 100)}%`, px = (v) => `${v}px`;
+  const render = () => {
+    rows.innerHTML = '';
+    check('show', 'Nişangahı göster');
+    const crow = document.createElement('div'); crow.className = 'row';
+    crow.innerHTML = '<span class="lab">Renk</span>';
+    const sw = document.createElement('div'); sw.className = 'swatches';
+    for (const c of ['#ffffff', '#4dff5e', '#5ef2ff', '#ffe14d', '#ff5ad2', '#ff4b4b']) {
+      const b = document.createElement('button'); b.type = 'button'; b.style.background = c; b.title = c;
+      if (xh.color.toLowerCase() === c) b.className = 'on';
+      b.onclick = () => { xh.color = c; changed(true); };
+      sw.appendChild(b);
+    }
+    const pick = document.createElement('input'); pick.type = 'color'; pick.value = xh.color; pick.title = 'Özel renk';
+    pick.oninput = () => { xh.color = pick.value; changed(); };
+    sw.appendChild(pick); crow.appendChild(sw); rows.appendChild(crow);
+    check('outline', 'Dış hat');
+    range('olTh', 'Dış hat kalınlığı', 1, 3, 1, px);
+    range('olA', 'Dış hat opaklığı', 0, 1, 0.05, pct);
+    check('dot', 'Merkez noktası');
+    range('dotSize', 'Nokta boyutu', 1, 6, 1, px);
+    range('dotA', 'Nokta opaklığı', 0, 1, 0.05, pct);
+    check('lines', 'İç çizgiler');
+    range('len', 'Çizgi uzunluğu', 1, 20, 1, px);
+    range('th', 'Çizgi kalınlığı', 1, 6, 1, px);
+    range('gap', 'Merkez boşluğu', 0, 20, 1, px);
+    range('lineA', 'Çizgi opaklığı', 0, 1, 0.05, pct);
+    check('tstyle', 'T-şekli (üst çizgi yok)');
+    check('dynamic', 'Hareket ve ateşle açılsın');
+  };
+  render();
+}
+
 
 // Rebinding table: click an action, then press the new key (Esc cancels). A key already in use is swapped.
 export function buildControls(root, onChange = () => {}) {
@@ -137,6 +248,7 @@ export function buildSettingsPanel(root, onChange) {
       buildControls(page, onChange);
       return page;
     }
+    if (sec.crosshair) { page.classList.add('xhHost'); buildCrosshairEditor(page, onChange); return page; }
     for (const it of sec.items) {
       const row = document.createElement('label'); row.className = 'row';
       const lab = document.createElement('span'); lab.className = 'lab'; lab.textContent = it.label;
@@ -167,6 +279,6 @@ export function buildSettingsPanel(root, onChange) {
     return page;
   });
   const reset = document.createElement('button'); reset.className = 'ghost small'; reset.type = 'button'; reset.textContent = 'VARSAYILANLARA DÖN';
-  reset.onclick = () => { const name = settings.name, binds = settings.binds; Object.assign(settings, DEFAULTS, { name, binds }); saveSettings(); buildSettingsPanel(root, onChange); for (const k of Object.keys(DEFAULTS)) onChange(k); };
+  reset.onclick = () => { const name = settings.name, binds = settings.binds; Object.assign(settings, DEFAULTS, { name, binds, xh: { ...XH_DEFAULT } }); saveSettings(); buildSettingsPanel(root, onChange); for (const k of Object.keys(DEFAULTS)) onChange(k); };
   root.appendChild(reset);
 }

@@ -1,7 +1,7 @@
 // Bodycam HUD (DOM): vitals, weapon/ammo, kill feed, hit markers, damage & grenade indicators,
 // toasts, streak callouts, scoreboard, death card, end-of-match report.
 import { WEAPONS, FIRE_MODE_LABEL, GRENADE } from './shared/weapons.js';
-import { settings, keyLabel } from './settings.js';
+import { settings, keyLabel, styleCrosshair } from './settings.js';
 
 const $ = (id) => document.getElementById(id);
 export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -52,7 +52,7 @@ export class Hud {
     const B = settings.binds;
     if (inv.primary) parts.push(`<span class="${slot === 'primary' ? 'on' : ''}"><b>${keyLabel(B.slot1)}</b>${short(inv.primary.w)}</span>`);
     parts.push(`<span class="${slot === 'secondary' ? 'on' : ''}"><b>${keyLabel(B.slot2)}</b>${short(inv.secondary.w)}</span>`);
-    parts.push(`<span class="${slot === 'melee' ? 'on' : ''}"><b>${keyLabel(B.slot3)}</b>BIÇAK</span>`);
+    parts.push(`<span class="${slot === 'melee' ? 'on' : ''}"><b>${keyLabel(B.slot3)}</b>M9</span>`);
     parts.push(`<span class="${inv.nades ? '' : 'off'}"><b>${keyLabel(B.nade)}</b>M67 ×${inv.nades}</span>`);
     this.set('slots', 'html', parts.join(''));
   }
@@ -109,20 +109,20 @@ export class Hud {
     e.classList.remove('hidden');
   }
   crosshair(on) { this.set('xhair', 'display', on ? '' : 'none'); }
-  // mode: 'cross' | 'dot' | 'ads' (sights up: faint center dot only); gap in px; dim while sprinting
-  crosshairState(mode, gap, color, dim) {
-    const e = this.el.xhair, cls = mode + (dim ? ' sprint' : '');
+  // settings changed: color, sizes, outline...
+  applyCrosshair(xh) { this.xh = xh; this.xhGap = null; styleCrosshair(this.el.xhair, xh); }
+  // mode: 'cross' | 'dot' | 'ads' (sights up: faint center dot only); gap in px (base + dynamic spread); dim while sprinting
+  crosshairState(mode, gap, dim) {
+    const e = this.el.xhair, cls = 'xh ' + mode + (dim ? ' sprint' : '') + (this.xh?.tstyle ? ' tstyle' : '');
     if (this.xhCls !== cls) { this.xhCls = cls; e.className = cls; }
     const g = gap.toFixed(1) + 'px';
     if (this.xhGap !== g) { this.xhGap = g; e.style.setProperty('--gap', g); }
-    if (this.xhCol !== color) { this.xhCol = color; e.style.setProperty('--xc', color); }
   }
   prompt(html) { this.set('prompt', 'display', html ? 'block' : 'none'); if (html) this.set('prompt', 'html', html); }
   aimName(n, friend) { this.set('aimname', 'text', n || ''); this.el.aimname.classList.toggle('friend', !!friend); }
   protect(on) { this.set('protect', 'display', on ? 'block' : 'none'); }
   cook(k) { this.set('cook', 'display', k > 0 ? 'block' : 'none'); if (k > 0) this.el.cook.style.setProperty('--k', k.toFixed(3)); }
   fps(on, v) { this.set('fps', 'display', on ? 'block' : 'none'); if (on) this.set('fps', 'text', `${v} FPS`); }
-
   // kind: 'b' body, 'h' head, 'plate', 'kill', 'killh'
   hitmarker(kind) {
     const h = this.el.hitmark;

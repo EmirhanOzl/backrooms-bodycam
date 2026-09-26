@@ -355,20 +355,39 @@ function buildSniper(M) {
   return g;
 }
 
+// M9 bayonet: clip-point blade with sawback spine, fuller and wire-cutter slot, crossguard with muzzle ring,
+// grooved rubber grip and latch pommel. The blade group spins about the guard for the inspect twirl.
 function buildKnife(M) {
   const [g, p] = gunRoot();
   const k = grp(p);
+  k.rotation.order = 'ZYX'; // x: roll about the blade (show both faces), z: tilt / twirl in the blade plane
   k.rotation.z = 1.0; // blade forward-up, handle down-back like a pistol grip
-  ext(k, [[0.0, 0.009], [0.13, 0.013], [0.168, 0.021], [0.19, 0.001], [0.165, -0.011], [0.0, -0.014]], 0.0045, M.steel, 0.0009);
-  box(k, 0.12, 0.004, 0.0048, 0.07, 0.004, 0, M.metal2);                   // fuller
-  box(k, 0.13, 0.003, 0.0035, 0.07, -0.012, 0, new THREE.MeshPhongMaterial({ color: 0xc8ccd0, specular: 0xffffff, shininess: 160 })); // edge
-  box(k, 0.01, 0.052, 0.02, -0.004, -0.002, 0, M.metal);                   // guard
-  ext(k, [[-0.12, 0.015], [-0.008, 0.013], [-0.008, -0.016], [-0.12, -0.017]], 0.026, M.rubber, 0.006);
-  for (let i = 0; i < 5; i++) box(k, 0.005, 0.034, 0.028, -0.025 - i * 0.02, -0.001, 0, M.poly);
-  box(k, 0.014, 0.036, 0.028, -0.126, -0.001, 0, M.metal);                 // pommel
+  const polish = new THREE.MeshPhongMaterial({ color: 0xd4d8dc, specular: 0xffffff, shininess: 190 });
+  const blade = [[0.005, 0.013], [0.118, 0.013], [0.15, 0.009], [0.182, 0.0015], [0.172, -0.008], [0.155, -0.014], [0.13, -0.0175], [0.02, -0.0185], [0.005, -0.015]];
+  const slot = curve((t) => [0.024 + Math.cos(t * Math.PI * 2) * 0.008, 0.001 + Math.sin(t * Math.PI * 2) * 0.004], 14);
+  ext(k, blade, 0.005, M.steel, 0.0011, [slot]);
+  // bright grind along the edge and the clip
+  ext(k, [[0.02, -0.0185], [0.13, -0.0175], [0.155, -0.014], [0.172, -0.008], [0.182, 0.0015], [0.176, 0.001], [0.165, -0.004], [0.15, -0.008], [0.13, -0.01], [0.02, -0.011]], 0.0056, polish, 0.0006);
+  ext(k, [[0.118, 0.013], [0.15, 0.009], [0.182, 0.0015], [0.176, 0.001], [0.148, 0.006], [0.118, 0.009]], 0.0054, polish, 0.0005);
+  box(k, 0.07, 0.0035, 0.0058, 0.068, 0.0055, 0, M.metal2); // fuller
+  // sawback teeth on the spine
+  const teeth = [[0.042, 0.0128]];
+  for (let i = 0; i < 12; i++) { const x = 0.042 + i * 0.0055; teeth.push([x + 0.0028, 0.0172], [x + 0.0055, 0.0128]); }
+  teeth.push([0.108, 0.011], [0.042, 0.011]);
+  ext(k, teeth, 0.0036, M.metal2, 0.0003);
+  // crossguard with the muzzle ring above the spine
+  ext(k, [[-0.004, 0.024], [0.004, 0.024], [0.005, -0.03], [0.012, -0.041], [0.004, -0.043], [-0.005, -0.031]], 0.019, M.metal, 0.0015);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0095, 0.0027, 8, 20), M.metal); ring.rotation.y = Math.PI / 2; ring.position.set(0, 0.0315, 0); k.add(ring);
+  // grip: finger grooves, checkering
+  ext(k, [[-0.005, 0.012], [-0.03, 0.0145], [-0.06, 0.0135], [-0.1, 0.0145], [-0.117, 0.012], [-0.117, -0.016], [-0.1, -0.0175], [-0.086, -0.0135], [-0.071, -0.0175], [-0.056, -0.0135], [-0.041, -0.0175], [-0.026, -0.0135], [-0.005, -0.016]], 0.027, M.rubber, 0.0065);
+  for (let i = 0; i < 7; i++) box(k, 0.0028, 0.03, 0.0285, -0.014 - i * 0.0145, -0.001, 0, M.poly);
+  // pommel with the bayonet latch
+  ext(k, [[-0.117, 0.014], [-0.132, 0.012], [-0.137, 0.0], [-0.132, -0.016], [-0.117, -0.018]], 0.025, M.metal, 0.002);
+  box(k, 0.012, 0.006, 0.029, -0.124, 0.016, 0, M.metal2);
+  box(k, 0.006, 0.005, 0.03, -0.108, 0.015, 0, M.metal);
   const c = Math.cos(1.0), s = Math.sin(1.0), rot = (x, y) => [x * c - y * s, x * s + y * c];
-  const [hx, hy] = rot(-0.062, 0), [tx, ty] = rot(0.19, 0.001);
-  g.userData = { cls: 'knife', muzzle: P2L(tx, ty), tip: P2L(tx, ty), gripR: P2L(hx, hy), gripL: null, sight: P2L(0.05, 0.12), knife: k };
+  const [hx, hy] = rot(-0.062, 0), [tx, ty] = rot(0.182, 0.0015);
+  g.userData = { cls: 'knife', muzzle: P2L(tx, ty), tip: P2L(tx, ty), gripR: P2L(hx, hy), gripL: null, sight: P2L(0.05, 0.12), knife: k, knifeTilt: 1.0 };
   return g;
 }
 

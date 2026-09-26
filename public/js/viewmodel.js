@@ -164,6 +164,21 @@ const ANIM = {
     },
     ev: [[0.02, 'snd:inspect'], [0.55, 'snd:cloth'], [0.6, 'snd:mode']],
   },
+  // M9 inspect: lift, turn the blade to show both faces, twirl it once around the index finger, catch, turn back
+  kn_inspect: {
+    f: (u) => {
+      const lift = kf(u, [[0, 0], [0.12, 1], [0.86, 1], [1, 0]]);
+      const tw = u < 0.4 ? 0 : u > 0.64 ? 1 : smooth((u - 0.4) / 0.24);
+      const catchK = kf(u, [[0.63, 0], [0.66, 1], [0.72, 0]]);
+      return {
+        p: [-0.075 * lift, 0.075 * lift + Math.sin(tw * Math.PI) * 0.025 - 0.012 * catchK, 0.045 * lift],
+        r: [0.2 * lift + kf(u, [[0.32, 0], [0.38, -0.12], [0.44, 0.05], [0.6, 0]]) - 0.08 * catchK, 0.55 * lift, 0.35 * lift + kf(u, [[0.12, 0], [0.26, 0.25], [0.74, 0.25], [0.86, 0]])],
+        kflip: kf(u, [[0.16, 0], [0.3, Math.PI], [0.74, Math.PI], [0.86, Math.PI * 2]]),
+        kspin: -tw * Math.PI * 2,
+      };
+    },
+    ev: [[0.02, 'snd:cloth'], [0.18, 'snd:kn_draw'], [0.4, 'snd:kn_swing'], [0.65, 'snd:mag_tap'], [0.76, 'snd:cloth']],
+  },
   nade_pull: {
     f: (u) => ({ p: [0.02, -0.18 * smooth(u), 0.04 * smooth(u)], r: [-0.5 * smooth(u), 0, 0.2 * smooth(u)], lh: { w: 1, at: 'pos', p: kf(u, [[0, LOW], [0.5, [-0.13, -0.19, -0.38]], [1, [-0.12, -0.16, -0.36]]]), r: [0.3, 0.2, 0.9] }, nade: true }),
     ev: [[0.02, 'snd:cloth'], [0.55, 'snd:gr_pin']],
@@ -303,6 +318,7 @@ export class Viewmodel {
     if (d.pump) d.pump.position.x = -(pose?.pump || 0) * 0.09;
     if (d.bolt) { d.bolt.rotation.x = -(pose?.boltRot || 0) * 1.1; d.bolt.position.x = -(pose?.boltPos || 0) * 0.075; }
     if (d.crane) d.crane.rotation.x = -(pose?.crane || 0) * 1.25;
+    if (d.knife) { d.knife.rotation.x = (pose?.kflip || 0) % (Math.PI * 2); d.knife.rotation.z = d.knifeTilt + (pose?.kspin || 0); }
     if (d.hammer) d.hammer.rotation.z = cyc * 0.5;
     if (d.cyl) d.cyl.rotation.x = damp(d.cyl.rotation.x, -(this.cylRot || 0), 30, dt);
     g.updateMatrixWorld(true);

@@ -41,16 +41,16 @@ Aşağıdakiler varsayılanlardır.
 | WASD | hareket |
 | Shift | koş (nefes/dayanıklılık harcar) · dürbündeyken nefes tut |
 | Ctrl / C | çömel (basılı tut veya aç/kapat — ayarlardan) |
-| Q / E | sola / sağa eğil (köşeden bakma) |
+| Z / X | sola / sağa eğil (köşeden bakma) |
 | Space | zıpla |
 | Sol tık | ateş · bıçakta hafif saldırı |
 | Sağ tık | nişan al · bıçakta ağır saplama |
 | R | şarjör değiştir |
 | B | atış modu (otomatik / 3'lü / tek atış) |
 | G veya 4 | el bombası — basılı tut: pimi çek ve beklet (pişir), bırak: at |
-| F | önündekini kullan (aşağı bakmana gerek yok): kutu aç · yerdeki silahı al / değiştir · otomatı aç |
+| E | önündekini kullan (aşağı bakmana gerek yok): sandık aç · yerdeki silahı al / değiştir · otomatı aç |
 | T | fener |
-| V | silahı incele |
+| F | silahı / bıçağı incele (M9 süngüyü parmağında çevirir) |
 | 1 / 2 / 3, tekerlek | birincil / ikincil / bıçak |
 | Tab | skor tablosu |
 | Esc | duraklat (ayarlar oyun içinden de değişir) |
@@ -83,7 +83,7 @@ Otomat menüsünde: yön yukarı / aşağı seç, A satın al, B kapat.
 | AK-47 | birincil | otomatik/tek; 3 vuruşta öldürür, sert tepme |
 | M4A1 | birincil | otomatik/3'lü/tek; kırmızı noktalı nişangah |
 | R700 | birincil | sürgülü, dürbünlü; nefes tutma (Shift), zırhsız gövdeye tek vuruş |
-| Savaş bıçağı | yakın dövüş | hafif / ağır saldırı; **sırttan bıçaklama tek vuruşta öldürür** |
+| M9 süngü | yakın dövüş | hafif / ağır saldırı; **sırttan bıçaklama tek vuruşta öldürür**; F ile parmakta çevirerek incele |
 | M67 el bombası | — | seker, yuvarlanır; duvar arkasına hasar vermez; bekletilebilir (elde patlayabilir!) |
 
 - Doluyken şarjör değiştirmek namludaki mermiyi korur (30+1); boş şarjör değişimi daha uzun sürer (kurma kolu).
@@ -103,16 +103,17 @@ Eklentiler silahta kalır: silah yere düşerse (ölünce ya da değiştirince) 
 ### Ganimet → para → otomat döngüsü
 
 - **Her şey fiziksel:** kutudan, cesetten ya da otomattan çıkan eşyalar havaya fırlar, halıya düşer ve orada durur.
-  Silaha **dönük dur ve F**'ye bas — nişanını bozup yere bakmana gerek yok (yuvan doluysa eldeki yere bırakılır).
+  Silaha **dönük dur ve E**'ye bas — nişanını bozup yere bakmana gerek yok (yuvan doluysa eldeki yere bırakılır).
   O yuvan boşsa ya da elindeki silahın aynısıysa (mermi olarak) **üzerinden geçmen** yeterli. İlk yardım, badem suyu,
   zırh plakası, el bombası, mermi kutusu ve para da üzerinden geçince — işine yarıyorsa — alınır. Seçili eşya hafifçe parlar.
-- **Kutular** bir ana eşya (silah, mermi, el bombası, ilk yardım, badem suyu, zırh) ve çoğu zaman biraz para verir;
-  40 sn sonra yeniden dolar. Kutudan çıkan silah da yere düşer — kimse eline zorla silah tutuşturmaz.
+- **M.E.G. ikmal sandıkları** (gezginlerin Seviye 0'a bıraktığı sert plastik taşıma çantaları) bir ana eşya (silah,
+  mermi, el bombası, ilk yardım, badem suyu, zırh) ve çoğu zaman biraz para verir; 40 sn sonra yeniden dolar.
+  Önlerindeki ışık doluyken yeşil, açılmışken kırmızı yanar. Kutudan çıkan silah da yere düşer — kimse eline zorla silah tutuşturmaz.
 - **Para:** leş başına $100 ve stil bonusları — KAFADAN, SIRTTAN BIÇAK, BIÇAKLA, UÇURDU (el bombası), UZAK ATIŞ (25 m+),
   HAVADA, DÜRBÜNSÜZ (R700 nişan almadan), ÇOKLU LEŞ, İNTİKAM, İLK KAN, SERİ BİTİRİCİ, SON NEFES. Kazanç ekranda kalem
   kalem akar. Ölünce paranın dörtte biri cesedin yanına saçılır.
-- **Badem suyu otomatları** (her seviyede 4 tane, duvar diplerinde, ışıkları uzaktan görünür): önünde F ile aç.
-  Menü resimli kartlardan oluşur, imleç serbest kalır: istediğine **tıkla** (ya da 1-0 kısayolları), F / ESC ile kapat.
+- **Badem suyu otomatları** (her seviyede 4 tane, duvar diplerinde, ışıkları uzaktan görünür): önünde E ile aç.
+  Menü resimli kartlardan oluşur, imleç serbest kalır: istediğine **tıkla** (ya da 1-0 kısayolları), E / ESC ile kapat.
   Sağlık, zırh, mermi, el bombası, her silah ve eklentiler satılır; aldığın şey bölmeden yuvarlanarak önüne düşer.
   Maç sen alışveriş yaparken durmaz.
   Botlar da para biriktirip otomattan silah ve zırh alır.
@@ -139,8 +140,10 @@ Eklentiler silahta kalır: silah yere düşerse (ölünce ya da değiştirince) 
 
 ## Ayarlar
 
-Oyun (isim, fare ve nişan/dürbün hassasiyeti, ham fare girişi, Y ekseni, nişan/çömelme basılı tut ↔ aç/kapat,
-nişangah: isabete göre açılan artı / nokta / kapalı ve rengi, vuruş işaretleri), Görüntü (kalite, FOV, **bodycam lens efekti yoğunluğu** — baş dönmesi yaşayanlar için, kamera sarsıntısı,
+Oyun (isim, fare ve nişan/dürbün hassasiyeti, ham fare girişi, Y ekseni, nişan/çömelme basılı tut ↔ aç/kapat, vuruş
+işaretleri), **Nişangah** (Valorant tarzı düzenleyici: canlı önizleme, hazır şablonlar — Klasik CS, Keskin, Nokta,
+T-şekli…; renk ve özel renk, dış hat kalınlığı/opaklığı, merkez noktası, çizgi uzunluğu/kalınlığı/boşluğu/opaklığı,
+T-şekli, hareket ve ateşle açılma), Görüntü (kalite, FOV, **bodycam lens efekti yoğunluğu** — baş dönmesi yaşayanlar için, kamera sarsıntısı,
 hareket bulanıklığı, parlaklık, FPS göstergesi), Ses (ana, efekt, ortam, arayüz, HRTF). Tarayıcıda saklanır.
 
 ## Teknik

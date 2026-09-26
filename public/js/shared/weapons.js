@@ -45,7 +45,7 @@ export const WEAPONS = {
     range: 160, fs: 60, fe: 130, minMul: 0.85, moveMul: 0.88, chamber: false, scope: true, draw: 0.65, adsFov: 0.2,
   },
   knife: {
-    label: 'SAVAŞ BIÇAĞI', short: 'BIÇAK', slot: 'melee', cls: 'knife', melee: true, modes: ['melee'], dmg: 45, heavy: 80, backLight: 100, backHeavy: 200,
+    label: 'M9 SÜNGÜ', short: 'M9', slot: 'melee', cls: 'knife', melee: true, modes: ['melee'], dmg: 45, heavy: 80, backLight: 100, backHeavy: 200,
     light: 0.42, heavyT: 0.95, lightHit: 0.12, heavyHit: 0.36, range: 1.8, moveMul: 1.08, draw: 0.3, adsFov: 1,
   },
 };
