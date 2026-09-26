@@ -253,3 +253,37 @@ export function labelTexture(text, color = '#fff') {
   x.fillStyle = color; x.fillText(text, 128, 24);
   return tex(c, { repeat: false });
 }
+
+// Blood spatter decal: dark red core with irregular droplets.
+export function bloodTexture() {
+  const S = 128, R = mulberry32(17);
+  const [c, x] = canvas(S, S);
+  const drop = (px, py, r, a) => {
+    const g = x.createRadialGradient(px, py, 0, px, py, r);
+    g.addColorStop(0, `rgba(70,4,4,${a})`); g.addColorStop(0.7, `rgba(55,3,3,${a * 0.85})`); g.addColorStop(1, 'rgba(40,2,2,0)');
+    x.fillStyle = g; x.beginPath(); x.arc(px, py, r, 0, 7); x.fill();
+  };
+  drop(64, 64, 26, 0.95);
+  for (let i = 0; i < 26; i++) {
+    const a = R() * 6.28, d = 14 + R() * 44, r = 2 + R() * 7 * (1 - d / 64);
+    drop(64 + Math.cos(a) * d, 64 + Math.sin(a) * d, Math.max(1.5, r), 0.7 + R() * 0.3);
+  }
+  for (let i = 0; i < 7; i++) { // streaks
+    const a = R() * 6.28, l = 20 + R() * 36;
+    x.strokeStyle = 'rgba(60,3,3,0.8)'; x.lineWidth = 1.5 + R() * 2.5; x.lineCap = 'round';
+    x.beginPath(); x.moveTo(64, 64); x.lineTo(64 + Math.cos(a) * l, 64 + Math.sin(a) * l); x.stroke();
+  }
+  return tex(c, { repeat: false });
+}
+
+// Explosion scorch mark on the carpet.
+export function scorchTexture() {
+  const S = 128, R = mulberry32(29);
+  const [c, x] = canvas(S, S);
+  const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, 'rgba(8,6,4,0.95)'); g.addColorStop(0.35, 'rgba(15,11,6,0.85)'); g.addColorStop(0.7, 'rgba(30,22,10,0.35)'); g.addColorStop(1, 'rgba(30,22,10,0)');
+  x.fillStyle = g; x.fillRect(0, 0, S, S);
+  x.strokeStyle = 'rgba(10,8,5,0.6)';
+  for (let i = 0; i < 18; i++) { const a = R() * 6.28, l = 30 + R() * 30; x.lineWidth = 1 + R() * 3; x.beginPath(); x.moveTo(64, 64); x.lineTo(64 + Math.cos(a) * l, 64 + Math.sin(a) * l); x.stroke(); }
+  return tex(c, { repeat: false });
+}

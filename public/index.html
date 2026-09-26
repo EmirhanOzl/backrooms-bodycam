@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BACKROOMS: BODYCAM</title>
+  <meta name="description" content="Backrooms Seviye 0'da geçen, göğüs kamerası görüntülü taktiksel FPS.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23c9b765'/%3E%3Ccircle cx='8' cy='8' r='4' fill='%23e22'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
   <script type="importmap">
     { "imports": { "three": "./vendor/three.module.js" } }
@@ -12,70 +14,107 @@
 <body>
   <canvas id="view"></canvas>
 
-  <!-- Bodycam overlay -->
+  <!-- always-on bodycam stamp (menu + game) -->
+  <div id="stamp" class="hidden">
+    <div><span id="rec">●</span> <span id="clock">0000-00-00 00:00:00</span> <span class="tz">+0300</span></div>
+    <div>AXON BODY 4 <span id="serial">X6039B1A</span></div>
+  </div>
+
+  <!-- in-game HUD -->
   <div id="hud" class="hidden">
-    <div id="stamp">
-      <div><span id="rec">●</span> <span id="clock">0000-00-00 00:00:00</span> <span class="tz">+0300</span></div>
-      <div>AXON BODY 4 <span id="serial">X6039B1A</span></div>
-    </div>
+    <div id="match"><div id="timer">--:--</div><div id="kd"></div></div>
     <div id="feed"></div>
     <div id="xhair"></div>
     <div id="hitmark"><i></i><i></i><i></i><i></i></div>
-    <div id="dmgdir"></div>
+    <div id="dmg"></div>
+    <div id="nadewarn"></div>
+    <div id="cook"></div>
     <div id="aimname"></div>
+    <div id="protect">KORUMA AKTİF</div>
     <div id="prompt"></div>
     <div id="toasts"></div>
+    <div id="streak"></div>
     <div id="vitals">
       <div class="bar"><label>SAĞLIK</label><div class="track"><div id="hpbar"></div></div><span id="hp">100</span></div>
       <div class="bar"><label>ZIRH</label><div class="track"><div id="arbar"></div></div><span id="ar">0</span></div>
+      <div class="bar thin" id="stam"><label>NEFES</label><div class="track"><div id="stbar"></div></div><span></span></div>
     </div>
     <div id="weapon">
       <div id="wname">G17 TABANCA</div>
-      <div id="ammo"><span id="mag">15</span><span class="sep">/</span><span id="res">45</span></div>
+      <div id="wmode">TEK ATIŞ</div>
+      <div id="ammo"><span id="mag">17</span><span class="sep">/</span><span id="res">51</span></div>
       <div id="slots"></div>
     </div>
-    <div id="kd"></div>
     <div id="banner"></div>
-    <div id="death" class="hidden"><div class="t">BAĞLANTI KESİLDİ</div><div id="killer"></div><div id="respawn"></div></div>
-    <div id="score" class="hidden"><h2>SKOR TABLOSU</h2><table><thead><tr><th>OYUNCU</th><th>LEŞ</th><th>ÖLÜM</th></tr></thead><tbody id="scorebody"></tbody></table><div id="fraglimit"></div></div>
+    <div id="death" class="hidden"><div class="t">SİNYAL KAYBI</div><div id="killer"></div><div id="killinfo"></div><div id="respawn"></div></div>
+    <div id="score" class="hidden"><h2>SKOR TABLOSU</h2><table><thead><tr><th>#</th><th>OPERATÖR</th><th>LEŞ</th><th>ÖLÜM</th><th>KAFA</th></tr></thead><tbody id="scorebody"></tbody></table><div id="fraglimit"></div></div>
+    <div id="endscreen" class="hidden"></div>
   </div>
+  <div id="fps"></div>
 
-  <!-- Menu -->
-  <div id="menu">
-    <div class="panel">
-      <div class="logo">BACKROOMS<span>: BODYCAM</span></div>
+  <!-- main menu -->
+  <div id="menu" class="hidden">
+    <div class="menu-left">
+      <div class="logo">BACKROOMS<span>BODYCAM</span></div>
       <div class="sub">SEVİYE 0 — "LOBİ" · 600 milyon m² nemli halı · 60 Hz floresan uğultusu</div>
-      <div class="row"><label>Operatör adı</label><input id="name" maxlength="16" value="Gezgin"></div>
-      <div class="cols">
-        <div class="col">
-          <h3>ÇOK OYUNCULU</h3>
-          <p id="onlineInfo">Sunucu kontrol ediliyor…</p>
-          <button id="btnOnline" disabled>SUNUCUYA KATIL</button>
-        </div>
-        <div class="col">
-          <h3>ÇEVRİMDIŞI · BOTLARA KARŞI</h3>
-          <div class="row"><label>Bot sayısı</label><input id="bots" type="range" min="1" max="11" value="6"><span id="botsv">6</span></div>
-          <div class="row"><label>Zorluk</label><select id="diff"><option value="0">Kolay</option><option value="1" selected>Normal</option><option value="2">Zor</option></select></div>
-          <button id="btnOffline">OYNA</button>
-        </div>
-      </div>
-      <details>
-        <summary>AYARLAR</summary>
-        <div class="row"><label>Fare hassasiyeti</label><input id="sens" type="range" min="0.2" max="3" step="0.05" value="1"><span id="sensv">1.00</span></div>
-        <div class="row"><label>Grafik</label><select id="quality"><option value="0">Düşük (hızlı)</option><option value="1" selected>Orta</option><option value="2">Yüksek</option></select></div>
-        <div class="row"><label>Nişangah noktası</label><input id="xhairOpt" type="checkbox" checked></div>
-        <div class="row"><label>Ses</label><input id="vol" type="range" min="0" max="1" step="0.05" value="0.8"></div>
-      </details>
-      <div class="keys">
-        <b>WASD</b> hareket · <b>SHIFT</b> koş · <b>CTRL / C</b> çömel · <b>Q / E</b> sola / sağa eğil · <b>SPACE</b> zıpla · <b>SOL TIK</b> ateş · <b>SAĞ TIK</b> nişan ·
-        <b>R</b> şarjör · <b>F</b> kutu aç · <b>T</b> fener · <b>1-4 / tekerlek</b> silah · <b>TAB</b> skor · <b>ESC</b> duraklat
-      </div>
-      <div id="loading" class="hidden">Seviye 0'a noclip yapılıyor… <span id="loadpct">0%</span></div>
+      <nav id="nav">
+        <button data-p="offline" class="on">BOTLARA KARŞI</button>
+        <button data-p="online">ÇOK OYUNCULU</button>
+        <button data-p="settings">AYARLAR</button>
+        <button data-p="controls">KONTROLLER</button>
+        <button data-p="about">HAKKINDA</button>
+      </nav>
+      <div class="ver">v1.1.0 · ERKEN ERİŞİM</div>
+    </div>
+    <div class="menu-right">
+      <section id="p-offline" class="panel">
+        <h3>ÇEVRİMDIŞI · BOTLARA KARŞI</h3>
+        <p class="desc">Herkes herkese karşı. Kutulardan silah, zırh, ilk yardım ve el bombası topla; öldürdüğün operatörlerin silahlarını yerden al.</p>
+        <div class="row"><span class="lab">Bot sayısı</span><input id="bots" type="range" min="1" max="11" value="6"><span id="botsv" class="val">6</span></div>
+        <div class="row"><span class="lab">Zorluk</span><select id="diff"><option value="0">Kolay</option><option value="1" selected>Normal</option><option value="2">Zor</option></select></div>
+        <div class="row"><span class="lab">Leş limiti</span><select id="frags"><option>10</option><option selected>20</option><option>30</option><option>50</option></select></div>
+        <div class="row"><span class="lab">Süre</span><select id="mtime"><option value="5">5 dk</option><option value="10" selected>10 dk</option><option value="15">15 dk</option><option value="20">20 dk</option></select></div>
+        <button id="btnOffline" class="big">OYNA</button>
+      </section>
+      <section id="p-online" class="panel hidden">
+        <h3>ÇOK OYUNCULU · PVP</h3>
+        <p id="onlineInfo" class="desc">Sunucu kontrol ediliyor…</p>
+        <p class="desc small">Yerel ağda oynamak için bilgisayarlardan birinde <kbd>npm start</kbd> çalıştır; konsolda yazan adresi arkadaşların tarayıcısında açsın. Boş yerleri botlar doldurur.</p>
+        <button id="btnOnline" class="big" disabled>SUNUCUYA KATIL</button>
+      </section>
+      <section id="p-settings" class="panel hidden"><h3>AYARLAR</h3><div id="settingsHome"></div></section>
+      <section id="p-controls" class="panel hidden"><h3>KONTROLLER</h3><div id="controlsBox"></div></section>
+      <section id="p-about" class="panel hidden">
+        <h3>HAKKINDA</h3>
+        <p class="desc">Bir göğüs kamerası kaydı olarak anlatılan, Backrooms Seviye 0'da geçen taktiksel bir nişancı oyunu. Harita her maçta tohumdan yeniden üretilir; ışıklar pişirilir, sesler oyun açılırken sentezlenir — tek bir harici dosya yok.</p>
+        <p class="desc small">İpuçları: Sesler duvar arkasından boğuk gelir; kulaklıkla adımlardan yön bulabilirsin. Feneri açık olan uzaktan görünür. Sırttan bıçaklama tek vuruşta öldürür. El bombasını <kbd>G</kbd> basılı tutarak bekletebilirsin — ama çok bekleme.</p>
+      </section>
     </div>
   </div>
 
-  <div id="pause" class="hidden"><div class="panel small"><h2>DURAKLATILDI</h2><p>Devam etmek için tıkla</p><button id="btnResume">DEVAM</button><button id="btnQuit" class="ghost">ANA MENÜ</button></div></div>
+  <!-- boot / level loading -->
+  <div id="loading">
+    <div class="load-inner">
+      <div class="logo small">BACKROOMS<span>BODYCAM</span></div>
+      <div id="loadtext">Kamera başlatılıyor…</div>
+      <div class="loadbar"><div id="loadfill"></div></div>
+      <button id="btnCancel" class="ghost small hidden">İPTAL</button>
+    </div>
+  </div>
 
+  <div id="pause" class="hidden">
+    <div class="panel pausep">
+      <h2>DURAKLATILDI</h2>
+      <div id="pauseMain">
+        <button id="btnResume">DEVAM</button>
+        <button id="btnPauseSettings" class="ghost">AYARLAR</button>
+        <button id="btnQuit" class="ghost">ANA MENÜ</button>
+      </div>
+      <div id="pauseSettings" class="hidden"><div id="settingsPause"></div><button id="btnPauseBack" class="ghost small">GERİ</button></div>
+    </div>
+  </div>
+
+  <div id="settingsBox"></div>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

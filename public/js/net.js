@@ -1,8 +1,8 @@
-// Transport: WebSocket to the Node server, or an in-browser GameCore loopback for offline play.
+// Transport: WebSocket to the Node server, or an offline GameCore (Web Worker, main-thread fallback).
 import { GameCore } from './shared/core.js';
 
 export class Net {
-  constructor() { this.queue = []; this.closed = false; }
+  constructor() { this.queue = []; this.closed = false; this.online = false; }
 
   static online(timeout = 2500) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -14,6 +14,7 @@ export class Net {
       ws.onopen = () => {
         clearTimeout(timer);
         const n = new Net();
+        n.online = true;
         n.ws = ws;
         ws.onmessage = (e) => { try { n.queue.push(JSON.parse(e.data)); } catch { /* ignore malformed */ } };
         ws.onclose = () => { n.closed = true; };
@@ -25,6 +26,17 @@ export class Net {
 
   static offline(opts) {
     const n = new Net();
+    try {
+      const w = new Worker(new URL('./core-worker.js', import.meta.url), { type: 'module' });
+      w.onmessage = (e) => { for (const m of e.data) n.queue.push(m); };
+      w.onerror = (e) => { console.error('offline core crashed', e); n.closed = true; };
+      w.postMessage({ t: '__init', opts });
+      n.send = (m) => w.postMessage(m);
+      n.worker = w;
+      return n;
+    } catch (e) {
+      console.warn('worker unavailable, simulating on the main thread', e);
+    }
     const core = new GameCore(opts);
     core.join('me', (m) => n.queue.push(m));
     n.send = (m) => core.handle('me', m);
@@ -34,7 +46,6 @@ export class Net {
       core.tick(Math.min(0.1, (now - last) / 1000));
       last = now;
     }, 1000 / 30);
-    n.core = core;
     return n;
   }
 
@@ -42,6 +53,7 @@ export class Net {
 
   close() {
     if (this.ws) this.ws.close();
+    if (this.worker) { this.worker.postMessage({ t: '__stop' }); this.worker.terminate(); }
     clearInterval(this.timer);
     this.closed = true;
   }
