@@ -6,6 +6,7 @@ export const PILLAR = 0.5;      // pillar width
 export const DOOR_W = 1.35;     // doorway width
 export const DOOR_H = 2.15;     // doorway height
 export const CRATE_W = 0.56, CRATE_D = 0.42, CRATE_H = 0.4;
+export const VENDOR_W = 0.9, VENDOR_D = 0.66, VENDOR_H = 1.9; // almond-water vending machine
 
 export function mulberry32(a) {
   return function () {
@@ -19,7 +20,14 @@ export function mulberry32(a) {
 // Edge arrays: h[z*W + x] = wall on the z-boundary above cell (x,z) (z in 0..H)
 //              v[z*(W+1) + x] = wall on the x-boundary left of cell (x,z) (x in 0..W)
 // 0 = open, 1 = solid wall, 2 = wall with doorway
-export function generateMap(seed, size = 18) {
+// light: 'normal' | 'dim' | 'dark' (how many troffers are dead or flickering)
+export const LIGHT_PRESETS = {
+  normal: { off: 0.05, flicker: 0.05, zones: 3, zr: [1.3, 1.2] },
+  dim: { off: 0.28, flicker: 0.1, zones: 5, zr: [1.8, 1.8] },
+  dark: { off: 0.8, flicker: 0.1, zones: 7, zr: [2.2, 2.2] },
+};
+export function generateMap(seed, size = 18, light = 'normal') {
+  const LP = LIGHT_PRESETS[light] || LIGHT_PRESETS.normal;
   const R = mulberry32(seed);
   const W = size, H = size;
   const h = new Uint8Array(W * (H + 1)).fill(1);
@@ -69,7 +77,7 @@ export function generateMap(seed, size = 18) {
   const vCorner = (cx, cz) => vAt(cx, cz - 1) || vAt(cx, cz);
 
   // 5) build solid boxes (2D AABBs, full height) + lintels (visual)
-  const boxes = [];   // {x0,z0,x1,z1,kind,capA,capB} kind 0=h-wall 1=v-wall 2=pillar
+  const boxes = [];   // {x0,z0,x1,z1,kind,capA,capB} kind 0=h-wall 1=v-wall 2=pillar 3=vending machine
   const lintels = []; // {x0,z0,x1,z1}
   const T = WALL_T / 2, gap0 = (CELL - DOOR_W) / 2, gap1 = (CELL + DOOR_W) / 2;
   // horizontal walls (run along x)
@@ -135,13 +143,24 @@ export function generateMap(seed, size = 18) {
   // 7) ceiling fixtures: one troffer per cell; broken + flickering ones; a few blackout zones
   const fixtures = [];
   const dark = [];
-  for (let i = 0; i < 3; i++) dark.push([R() * W, R() * H, 1.3 + R() * 1.2]);
+  for (let i = 0; i < LP.zones; i++) dark.push([R() * W, R() * H, LP.zr[0] + R() * LP.zr[1]]);
   for (let z = 0; z < H; z++) for (let x = 0; x < W; x++) {
     let state = 0; // 0 on, 1 off, 2 flicker
     const r = R();
-    if (r < 0.05) state = 1; else if (r < 0.1) state = 2;
+    if (r < LP.off) state = 1; else if (r < LP.off + LP.flicker) state = 2;
     for (const d of dark) if (Math.hypot(x + 0.5 - d[0], z + 0.5 - d[1]) < d[2] && R() < 0.85) state = 1;
     fixtures.push({ x: (x + 0.5) * CELL, z: (z + 0.5) * CELL, state, rot: (x + z) & 1 });
+  }
+
+  // rough per-cell light level (0..~1.5) for gameplay: bots see poorly in the dark
+  const cellLight = new Float32Array(W * H);
+  for (let z = 0; z < H; z++) for (let x = 0; x < W; x++) {
+    let L = 0;
+    for (let j = Math.max(0, z - 2); j <= Math.min(H - 1, z + 2); j++) for (let i = Math.max(0, x - 2); i <= Math.min(W - 1, x + 2); i++) {
+      const f = fixtures[j * W + i], I = f.state === 1 ? 0 : f.state === 2 ? 0.5 : 1;
+      if (I) L += I * Math.exp(-((i - x) ** 2 + (j - z) ** 2) * CELL * CELL / 18);
+    }
+    cellLight[z * W + x] = L;
   }
 
   // 8) loot crates in cell corners (never blocking doorways or center paths)
@@ -156,8 +175,41 @@ export function generateMap(seed, size = 18) {
     cellCrate[z * W + x] = id;
   }
 
+  // 9) vending machines against solid walls, spread across the level (solid boxes, kind 3)
+  const cand = [];
+  for (let z = 0; z < H; z++) for (let x = 0; x < W; x++) {
+    if (h[z * W + x] === 1) cand.push([x, z, 0, 1]);
+    if (h[(z + 1) * W + x] === 1) cand.push([x, z, 0, -1]);
+    if (v[z * (W + 1) + x] === 1) cand.push([x, z, 1, 0]);
+    if (v[z * (W + 1) + x + 1] === 1) cand.push([x, z, -1, 0]);
+  }
+  const vendors = [];
+  const nV = Math.max(2, Math.round((W * H) / 80));
+  for (let k = 0; k < nV && cand.length; k++) {
+    let pick = null, bestD = -1;
+    for (let tries = 0; tries < (k ? 60 : 1); tries++) {
+      const c = cand[(R() * cand.length) | 0];
+      const px = (c[0] + 0.5) * CELL, pz = (c[1] + 0.5) * CELL;
+      let dmin = 1e9;
+      for (const o of vendors) dmin = Math.min(dmin, Math.hypot(o.x - px, o.z - pz));
+      // spread out, but not all pushed to the outer walls
+      const edge = c[0] === 0 || c[1] === 0 || c[0] === W - 1 || c[1] === H - 1;
+      const sc = Math.min(dmin, CELL * 7) + R() * CELL * 1.5 - (edge ? CELL * 2 : 0);
+      if (sc > bestD) { bestD = sc; pick = c; }
+    }
+    const [x, z, nx, nz] = pick;
+    cand.splice(cand.indexOf(pick), 1);
+    const cx = (x + 0.5) * CELL, cz = (z + 0.5) * CELL, back = CELL / 2 - T, half = VENDOR_W / 2;
+    const vx = cx - nx * (back - VENDOR_D / 2), vz = cz - nz * (back - VENDOR_D / 2);
+    const hx = nx ? VENDOR_D / 2 : half, hz = nz ? VENDOR_D / 2 : half;
+    const bi = boxes.length;
+    boxes.push({ x0: vx - hx, x1: vx + hx, z0: vz - hz, z1: vz + hz, kind: 3, capA: 1, capB: 1 });
+    grid[z * W + x].push(bi);
+    vendors.push({ id: vendors.length, x: vx, z: vz, nx, nz, rot: Math.atan2(nx, nz), cell: z * W + x });
+  }
+
   const map = {
-    seed, W, H, h, v, boxes, lintels, grid, fixtures, crates, cellCrate, pillarCorners,
+    seed, W, H, h, v, boxes, lintels, grid, fixtures, crates, cellCrate, pillarCorners, cellLight, light, vendors,
     size: W * CELL, stamp: new Uint32Array(boxes.length), stampId: 0,
   };
   return map;
@@ -165,6 +217,7 @@ export function generateMap(seed, size = 18) {
 
 // --- Raycasting (2D, walls are full height) --------------------------------
 export const hitNormal = [0, 0];
+export const rayInfo = { box: -1 }; // index of the box the last raycast hit (-1: none)
 
 function rayBox(b, ox, oz, dx, dz, idx, idz) {
   let tmin = -Infinity, tmax = Infinity, nx = 0, nz = 0;
@@ -196,6 +249,7 @@ export function raycast(map, ox, oz, dx, dz, maxD = 1e4) {
   let tmx = dx > 0 ? ((cx + 1) * CELL - ox) * idx : dx < 0 ? (cx * CELL - ox) * idx : Infinity;
   let tmz = dz > 0 ? ((cz + 1) * CELL - oz) * idz : dz < 0 ? (cz * CELL - oz) * idz : Infinity;
   let best = maxD;
+  rayInfo.box = -1;
   const stamp = ++map.stampId, st = map.stamp, boxes = map.boxes;
   if (stamp > 4e9) { st.fill(0); map.stampId = 1; }
   for (let guard = 0; guard < 256; guard++) {
@@ -205,8 +259,9 @@ export function raycast(map, ox, oz, dx, dz, maxD = 1e4) {
         const bi = list[i];
         if (st[bi] === stamp) continue;
         st[bi] = stamp;
+        if (boxes[bi].off) continue;
         const t = rayBox(boxes[bi], ox, oz, dx, dz, idx, idz);
-        if (t < best) { best = t; hitNormal[0] = rayBox.nx; hitNormal[1] = rayBox.nz; }
+        if (t < best) { best = t; hitNormal[0] = rayBox.nx; hitNormal[1] = rayBox.nz; rayInfo.box = bi; }
       }
     } else if (cx < -1 || cz < -1 || cx > W || cz > H) break;
     const tn = tmx < tmz ? tmx : tmz;

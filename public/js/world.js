@@ -1,6 +1,6 @@
 // Builds the Backrooms Level 0 geometry with baked fluorescent lighting.
 import * as THREE from 'three';
-import { CELL, CEIL, DOOR_H, CRATE_W, CRATE_D, CRATE_H, raycast, mulberry32 } from './shared/map.js';
+import { CELL, CEIL, DOOR_H, CRATE_W, CRATE_D, CRATE_H, VENDOR_W, VENDOR_D, VENDOR_H, raycast, mulberry32 } from './shared/map.js';
 import * as TX from './textures.js';
 
 const K_DIRECT = 7.5;
@@ -222,7 +222,7 @@ export function buildWorld(map, scene, renderer, onProgress = () => {}) {
       face(b.x1, b.z0, b.x1, b.z1, 1, 0, 0, CEIL, uo);
       if (b.capA) face(b.x0, b.z0, b.x1, b.z0, 0, -1, 0, CEIL, uo);
       if (b.capB) face(b.x0, b.z1, b.x1, b.z1, 0, 1, 0, CEIL, uo);
-    } else {
+    } else if (b.kind === 2) {
       face(b.x0, b.z0, b.x1, b.z0, 0, -1, 0, CEIL, uo);
       face(b.x0, b.z1, b.x1, b.z1, 0, 1, 0, CEIL, uo);
       face(b.x0, b.z0, b.x0, b.z1, -1, 0, 0, CEIL, uo);
@@ -275,6 +275,8 @@ export function buildWorld(map, scene, renderer, onProgress = () => {}) {
   const bodyGeo = new THREE.BoxGeometry(CRATE_W, CRATE_H, CRATE_D);
   bodyGeo.translate(0, CRATE_H / 2, 0);
   { const ix = Array.from(bodyGeo.index.array); ix.splice(12, 6); bodyGeo.setIndex(ix); } // open top
+  // the bottom face (vertices 12..15) doubles as the inner floor: lifted off the carpet so the two never z-fight
+  { const p = bodyGeo.attributes.position; for (let k = 12; k < 16; k++) p.setY(k, 0.04); }
   const lidGeo = new THREE.BoxGeometry(CRATE_W + 0.02, 0.035, CRATE_D + 0.02);
   lidGeo.translate(0, 0.0175, (CRATE_D + 0.02) / 2);
   const nC = map.crates.length;
@@ -299,6 +301,28 @@ export function buildWorld(map, scene, renderer, onProgress = () => {}) {
   };
   for (let i = 0; i < nC; i++) setCrate(i);
   group.add(crateBody, crateLid);
+
+  // ---------- almond-water vending machines ----------
+  const VT = TX.vendorTextures();
+  const vendorGeo = new THREE.BoxGeometry(VENDOR_W, VENDOR_H, VENDOR_D).translate(0, VENDOR_H / 2, 0);
+  const glowGeo = new THREE.PlaneGeometry(VENDOR_W, VENDOR_H).translate(0, VENDOR_H / 2, VENDOR_D / 2 + 0.003);
+  const floorGlowGeo = new THREE.PlaneGeometry(1.7, 1.3).rotateX(-Math.PI / 2);
+  const floorGlowTex = TX.softDotTexture();
+  const vendorGlows = [];
+  for (const vd of map.vendors) {
+    const L = Math.min(1.4, sampleLight(vd.x + vd.nx * 0.8, vd.z + vd.nz * 0.8) * 0.9 + 0.05);
+    const side = bakeMaterial({ color: 0xb9ab86 }, { uniform: true });
+    const front = bakeMaterial({ map: VT.front }, { uniform: true });
+    for (const m of [side, front]) m.userData.uLight.value.setRGB(L, L * 0.97, L * 0.88);
+    const body = new THREE.Mesh(vendorGeo, [side, side, side, side, front, side]);
+    body.position.set(vd.x, 0, vd.z); body.rotation.y = vd.rot;
+    const glowMat = new THREE.MeshBasicMaterial({ map: VT.glow, transparent: true, color: new THREE.Color(1.25, 1.25, 1.15), fog: true });
+    const glow = new THREE.Mesh(glowGeo, glowMat); body.add(glow);
+    const floor = new THREE.Mesh(floorGlowGeo, new THREE.MeshBasicMaterial({ map: floorGlowTex, color: new THREE.Color(0.2, 0.21, 0.16), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    floor.position.set(vd.x + vd.nx * 0.95, 0.004, vd.z + vd.nz * 0.95); floor.rotation.y = vd.rot;
+    group.add(body, floor);
+    vendorGlows.push({ glowMat, floorMat: floor.material, next: 3 + Math.random() * 20, off: 0 });
+  }
 
   scene.fog = new THREE.Fog(0x2a2410, 14, 58);
 
@@ -330,6 +354,13 @@ export function buildWorld(map, scene, renderer, onProgress = () => {}) {
           }
         }
         if (flickers.length) panel.instanceColor.needsUpdate = true;
+        // the machines' tubes stutter now and then
+        for (const g of vendorGlows) {
+          if (time > g.next) { g.off = g.off ? 0 : 1; g.next = time + (g.off ? 0.04 + Math.random() * 0.12 : 4 + Math.random() * 25); }
+          const k = g.off ? 0.35 : 1;
+          g.glowMat.color.setRGB(1.25 * k, 1.25 * k, 1.15 * k);
+          g.floorMat.color.setRGB(0.2 * k, 0.21 * k, 0.16 * k);
+        }
       }
     },
   };
