@@ -45,6 +45,7 @@ export class GameCore {
     this.fragLimit = opts.fragLimit ?? 25;
     this.timeLimit = opts.timeLimit ?? 600;
     this.mode = opts.mode === 'tdm' ? 'tdm' : 'ffa';
+    this.light = ['normal', 'dim', 'dark'].includes(opts.light) ? opts.light : 'normal';
     this.teamScore = [0, 0];
     this.time = 0;
     this.players = new Map();
@@ -57,7 +58,7 @@ export class GameCore {
 
   newLevel(seed) {
     this.seed = seed;
-    this.map = generateMap(this.seed, this.size);
+    this.map = generateMap(this.seed, this.size, this.light);
     this.crates = this.map.crates.map((c) => ({ id: c.id, open: false, respawnAt: 0 }));
     this.drops = new Map();
     this.dropSeq = 0;
@@ -90,7 +91,7 @@ export class GameCore {
       this.syncBots();
       this.spawn(p);
       this.send(id, {
-        t: 'welcome', id, seed: this.seed, size: this.size, crates: this.crates.map((k) => (k.open ? 1 : 0)),
+        t: 'welcome', id, seed: this.seed, size: this.size, light: this.light, crates: this.crates.map((k) => (k.open ? 1 : 0)),
         drops: [...this.drops.values()].map(dropMsg), fragLimit: this.fragLimit, timeLimit: this.timeLimit, st: r3(this.time),
         mode: this.mode, team: p.team, teamScore: this.teamScore,
       });
@@ -274,7 +275,7 @@ export class GameCore {
   newMatch() {
     this.newLevel((Math.random() * 1e9) | 0);
     this.teamScore = [0, 0];
-    this.broadcast({ t: 'reset', seed: this.seed, size: this.size, fragLimit: this.fragLimit, timeLimit: this.timeLimit });
+    this.broadcast({ t: 'reset', seed: this.seed, size: this.size, light: this.light, fragLimit: this.fragLimit, timeLimit: this.timeLimit });
     for (const p of this.players.values()) p.alive = false;
     for (const p of this.players.values()) { this.resetStats(p); this.spawn(p); if (!p.bot) this.send(p.id, this.spawnMsg(p)); }
   }
@@ -515,14 +516,18 @@ export class GameCore {
       const dx = o.x - b.x, dz = o.z - b.z, d = Math.hypot(dx, dz);
       if (d >= bd) continue;
       const facing = (dx * fx + dz * fz) / (d || 1);
-      const lit = o.flags & F.FLASH ? 1 : 0.85;
+      // unlit targets in dark areas are only spotted up close; a flashlight gives you away
+      const vis = o.flags & F.FLASH ? 1 : Math.min(1, Math.max(0.25, this.lightAt(o.x, o.z)));
+      if (d > 36 * vis) continue;
       if (facing < -0.3 && d > 4) continue;
-      if (d > 27 * lit && facing < 0.5) continue;
+      if (d > 27 * vis && facing < 0.5) continue;
       if (!lineOfSight(this.map, b.x, b.z, o.x, o.z)) continue;
       best = o; bd = d;
     }
     return best;
   }
+
+  lightAt(x, z) { return this.map.cellLight[cellIndex(this.map, x, z)]; }
 
   botWant(b, tg, dist) {
     if (tg && (dist < 1.7 || (b.weapon === 'knife' && dist < 2.6) || (dist < 3 && b.reloadUntil))) return 'knife';
@@ -631,7 +636,9 @@ export class GameCore {
     }
     const moved = Math.hypot(b.x - ox, b.z - oz);
     b.crouch = crouch;
-    b.flags = (moved > 0.02 ? F.MOVE : 0) | (b.reloadUntil ? F.RELOAD : 0) | (crouch ? F.CROUCH : 0) | (sprint && moved > 0.02 ? F.SPRINT : 0) | (tg && !w.melee ? F.ADS : 0);
+    const L = this.lightAt(b.x, b.z);
+    if (L < 0.3) b.flash = true; else if (L > 0.55) b.flash = false;
+    b.flags = (moved > 0.02 ? F.MOVE : 0) | (b.reloadUntil ? F.RELOAD : 0) | (crouch ? F.CROUCH : 0) | (sprint && moved > 0.02 ? F.SPRINT : 0) | (tg && !w.melee ? F.ADS : 0) | (b.flash ? F.FLASH : 0);
     b.stepT -= dt;
     if (moved > 0.02 && b.stepT <= 0 && !crouch) { b.stepT = 0.45; this.noise(b, sprint ? 10 : 6); }
     if (ml > 0.01 && moved < spd * dt * 0.25) {

@@ -12,7 +12,8 @@ npm start          # http://localhost:3000
 npm test           # ortak oyun çekirdeğinin testleri (botlarla tam maç simülasyonu dahil)
 ```
 
-- **Çevrimdışı (botlara karşı):** Menüden mod (herkes herkese / takım çatışması), bot sayısı, zorluk, skor limiti ve süreyi seçip `OYNA`.
+- **Çevrimdışı (botlara karşı):** Menüden mod (herkes herkese / takım çatışması), ışıklandırma (normal / loş / karartma),
+  bot sayısı, zorluk, skor limiti ve süreyi seçip `OYNA`.
   Çevrimdışı maç ESC ile duraklatılınca (veya sekme arka plana geçince) gerçekten durur.
   Maç simülasyonu tarayıcıda ayrı bir Web Worker'da çalışır; `public/` klasörü herhangi bir statik
   sunucuda da oynanır (ES modülleri `file://` üzerinden açılamaz, bir HTTP sunucusu şart).
@@ -20,7 +21,8 @@ npm test           # ortak oyun çekirdeğinin testleri (botlarla tam maç simü
   Arkadaşların bu adresi açıp `ÇOK OYUNCULU → SUNUCUYA KATIL` der. Boş yerleri botlar doldurur.
 
 Sunucu ayarları (ortam değişkenleri): `PORT` (3000), `BOTS` (toplam katılımcı hedefi, 5), `DIFF` (0/1/2),
-`FRAGS` (leş / takım skor limiti, 25), `TIME` (maç süresi, saniye, 600), `MODE` (`ffa` veya `tdm`).
+`FRAGS` (leş / takım skor limiti, 25), `TIME` (maç süresi, saniye, 600), `MODE` (`ffa` veya `tdm`),
+`LIGHT` (`normal`, `dim` veya `dark`).
 
 ## Kontroller
 
@@ -78,6 +80,8 @@ Aşağıdakiler varsayılanlardır.
 - Vuruş işaretleri anında gelir: beyaz = gövde/bacak, sarı = kafa, mavi = zırh, kırmızı = öldürme (her birinin sesi farklı).
 - Seriler: ÇİFTE LEŞ, ÜÇLÜ LEŞ, DURDURULAMAZ…
 - Bazı bölgelerde floresanlar bozuk: karanlıkta fener (T) şart, ama feneri açık olan daha uzaktan görülür.
+  **Karartma** ışıklandırmasında floresanların çoğu sönüktür: botlar karanlıkta fenerlerini açar, fenersiz ve karanlıktaki
+  bir hedefi ancak yakından fark eder — fenerini kapatıp pusu kurabilir, ya da düşmanın feneri seni ele vermeden onu görebilirsin.
 - Sesler duvar arkasından boğuk gelir; ayak seslerinden, şarjör değiştiren düşmanların sesinden ve yakından geçen
   mermilerin vızıltısından yön bulabilirsin (kulaklıkla HRTF 3D ses önerilir). Yakın patlama kulağı çınlatır.
 - Doğduktan sonra 2 sn koruma vardır (ateş edince biter).

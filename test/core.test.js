@@ -40,7 +40,7 @@ test('bots play full matches without errors and the match cycles to a new level'
 });
 
 test('knife: backstab kills, frontal light stab does 45', () => {
-  const { core, a, v } = duel();
+  const { core, v } = duel();
   core.handle('a', { t: 'swing', h: 0 });
   core.handle('a', { t: 'stab', id: 'v' });
   assert.equal(v.alive, false, 'backstab (light) is lethal');
@@ -155,4 +155,14 @@ test('team deathmatch: balanced teams, no friendly fire, team score ends the mat
     const v = seen.find((m) => m.t === 'roster')?.list.find((p) => p.id === k.v);
     if (a && v) assert.notEqual(a.team, v.team, 'no team kills');
   }
+});
+
+test('blackout levels: most lights off, bots use flashlights', () => {
+  const core = new GameCore({ bots: 6, seed: 5, light: 'dark' });
+  const off = core.map.fixtures.filter((f) => f.state === 1).length / core.map.fixtures.length;
+  assert.ok(off > 0.7, `lights off ${off}`);
+  const normal = new GameCore({ bots: 0, seed: 5 });
+  assert.ok(normal.map.fixtures.filter((f) => f.state === 1).length / normal.map.fixtures.length < 0.25);
+  for (let i = 0; i < 90; i++) core.tick(1 / 30);
+  assert.ok([...core.players.values()].some((p) => p.flags & 4), 'some bot has its flashlight on');
 });

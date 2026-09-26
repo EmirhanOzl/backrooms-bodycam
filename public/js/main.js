@@ -1,8 +1,8 @@
 // BACKROOMS: BODYCAM — client
 import * as THREE from 'three';
 import { generateMap, CEIL, CRATE_H, raycast, lineOfSight, collide, hitNormal, findPath, cellCenter } from './shared/map.js';
-import { WEAPONS, WEAPON_ORDER, GRENADE, dmgAt, zoneMul, meleeDamage } from './shared/weapons.js';
-import { PLAYER_R, EYE_STAND, EYE_CROUCH, HEAD_STAND, HEAD_CROUCH, HEAD_R, BODY_R, MAX_HP, F, RESPAWN_T, PROTECT_T, TEAM_NAMES } from './shared/core.js';
+import { WEAPONS, WEAPON_ORDER, GRENADE, dmgAt, zoneMul } from './shared/weapons.js';
+import { PLAYER_R, EYE_STAND, EYE_CROUCH, HEAD_STAND, HEAD_CROUCH, HEAD_R, BODY_R, MAX_HP, F, RESPAWN_T, PROTECT_T } from './shared/core.js';
 import { NADE_STEP, makeNade, stepNade, throwVelocity } from './shared/physics.js';
 import { buildWorld, bakeMaterial } from './world.js';
 import { gunMaterials, Soldier, mergedGunGeometry } from './models.js';
@@ -78,6 +78,8 @@ class Game {
     this.muzzleLight = new THREE.PointLight(0xffa850, 0, 14, 1.6);
     this.remoteLights = [0, 1].map(() => new THREE.PointLight(0xffa850, 0, 12, 1.6));
     this.boomLight = new THREE.PointLight(0xffa050, 0, 20, 1.4);
+    // fixed pool of real spot lights for the two nearest remote flashlights (a fixed light count never recompiles shaders)
+    this.remoteFlash = [0, 1].map(() => { const l = new THREE.SpotLight(0xfff1dc, 0, 26, 0.42, 0.6, 1.4); this.scene.add(l, l.target); return l; });
     this.scene.add(this.flashlight, this.flashlight.target, this.muzzleLight, this.boomLight, ...this.remoteLights);
 
     this.particles = new Particles(this.scene, 700);
@@ -228,7 +230,7 @@ class Game {
     let net;
     try {
       net = mode === 'online' ? await Net.online(4000)
-        : Net.offline({ bots: settings.bots + 1, difficulty: settings.diff, fragLimit: settings.frags, timeLimit: settings.time * 60, mode: settings.mode }, !location.search.includes('noworker'));
+        : Net.offline({ bots: settings.bots + 1, difficulty: settings.diff, fragLimit: settings.frags, timeLimit: settings.time * 60, mode: settings.mode, light: settings.light }, !location.search.includes('noworker'));
     } catch {
       this.loadProgress('Sunucuya bağlanılamadı.', 0);
       setTimeout(() => this.loading(false), 1600);
@@ -254,7 +256,7 @@ class Game {
     this.srv = null; this.lastSnapT = null;
     this.loadProgress('Seviye 0\'a noclip yapılıyor…', 0.45);
     await nextFrame();
-    this.loadLevel(welcome.seed, welcome.size);
+    this.loadLevel(welcome.seed, welcome.size, welcome.light);
     welcome.crates.forEach((o, i) => this.world.setCrateOpen(i, !!o, true));
     for (const d of welcome.drops) this.addDrop(d);
     this.me = this.newMe();
@@ -288,6 +290,7 @@ class Game {
     this.net = null;
     for (const r of this.remotes.values()) this.scene.remove(r.model.root);
     this.remotes.clear(); this.names.clear(); this.events.length = 0;
+    for (const L of this.remoteFlash) L.intensity = 0;
     this.clearDrops(); this.clearNades();
     this.me = this.newMe();
     this.particles.clear(); this.fire.clear(); this.tracers.clear();
@@ -296,7 +299,7 @@ class Game {
   }
 
   // (Re)build the level for a seed; used at boot, at join and at every new match.
-  loadLevel(seed, size) {
+  loadLevel(seed, size, light = 'normal') {
     if (this.world) {
       this.scene.remove(this.world.group);
       this.world.group.traverse((o) => {
@@ -306,7 +309,7 @@ class Game {
         o.material.dispose();
       });
     }
-    this.map = generateMap(seed, size);
+    this.map = generateMap(seed, size, light);
     const t0 = performance.now();
     this.world = buildWorld(this.map, this.scene, this.renderer);
     console.log('world build ms', Math.round(performance.now() - t0));
@@ -720,7 +723,7 @@ class Game {
         this.hud.endScreen(null);
         this.hud.banner('');
         this.fragLimit = m.fragLimit ?? this.fragLimit; this.timeLimit = m.timeLimit ?? this.timeLimit;
-        this.loadLevel(m.seed, m.size);
+        this.loadLevel(m.seed, m.size, m.light);
         this.renderer.compile(this.scene, this.camera);
         this.hud.toast('YENİ SEVİYE');
         return;
@@ -1137,6 +1140,7 @@ class Game {
     this.updateCamera(dt);
     this.updateViewmodel(dt);
     this.updateRemotes(dt);
+    this.updateRemoteFlashlights();
     this.updateNades(dt);
     this.world.update(dt, this.time);
     this.particles.update(dt); this.fire.update(dt); this.tracers.update(dt); this.muzzles.update(dt); this.vmMuzzle.update(dt); this.shells.update(dt);
@@ -1203,7 +1207,7 @@ class Game {
   }
 
   updatePlayer(dt) {
-    const me = this.me, k = this.keys;
+    const me = this.me;
     me.hurt = Math.max(0, me.hurt - dt * 1.2);
     me.trauma = Math.max(0, me.trauma - dt * 1.8);
     if (!me.alive) { me.deathT = Math.min(1, me.deathT + dt * 1.6); me.vel.set(0, 0, 0); this.nearCrate = -1; this.nearDrop = null; return; }
@@ -1452,6 +1456,7 @@ class Game {
       r.model.setWeapon(WEAPON_ORDER[r.w] || 'pistol');
       const L = this.world.sampleLight(r.x, r.z) * 0.95 + 0.03;
       r.model.update(dt, { x: r.x, y: r.y, z: r.z, yaw: r.yaw, pitch: r.pitch, crouch: !!(r.flags & F.CROUCH), speed: r.alive ? r.speed : 0, alive: r.alive, flash: r.flags & F.FLASH, lean: r.lean, reload: r.flags & F.RELOAD, sprint: r.flags & F.SPRINT }, L);
+      if (r.alive && ((r.flags ^ was) & F.FLASH) && dist < 15) this.sound.play('ui_click', { cat: 'mech', pos: this.v1.set(r.x, r.y + 1.2, r.z), vol: 0.35, ref: 1.2, occl: this.occluded(this.v1) });
       // hear enemies reload
       if (r.alive && (r.flags & F.RELOAD) && !(was & F.RELOAD) && dist < 25) {
         const p = this.v1.set(r.x, r.y + 1.1, r.z), occl = this.occluded(p), now = this.sound.now();
@@ -1467,6 +1472,26 @@ class Game {
         }
       }
     }
+  }
+
+  // the two nearest remote flashlights get real spot lights (aimed from the gun muzzle)
+  updateRemoteFlashlights() {
+    const cp = this.camera.position, list = [];
+    for (const r of this.remotes.values()) {
+      if (!r.alive || !(r.flags & F.FLASH) || !r.model.root.visible) continue;
+      const d = Math.hypot(r.x - cp.x, r.z - cp.z);
+      if (d < 32) list.push([d, r]);
+    }
+    list.sort((a, b) => a[0] - b[0]);
+    this.remoteFlash.forEach((L, i) => {
+      const r = list[i] && list[i][1];
+      if (!r) { L.intensity = 0; return; }
+      r.model.muzzleWorld(L.position);
+      const fx = -Math.sin(r.yaw) * Math.cos(r.pitch), fy = Math.sin(r.pitch), fz = -Math.cos(r.yaw) * Math.cos(r.pitch);
+      L.target.position.set(L.position.x + fx * 10, L.position.y + fy * 10, L.position.z + fz * 10);
+      L.target.updateMatrixWorld();
+      L.intensity = 32;
+    });
   }
 
   // positional buzz of the nearest flickering troffer + random far-off noises of the level
@@ -1562,6 +1587,8 @@ $('diff').value = settings.diff; $('frags').value = settings.frags; $('mtime').v
 const modeLabel = () => { $('fragsLabel').textContent = settings.mode === 'tdm' ? 'Takım skor limiti' : 'Leş limiti'; };
 modeLabel();
 $('gmode').onchange = () => { settings.mode = $('gmode').value; saveSettings(); modeLabel(); };
+$('glight').value = settings.light;
+$('glight').onchange = () => { settings.light = $('glight').value; saveSettings(); };
 $('bots').oninput = () => { settings.bots = +$('bots').value; $('botsv').textContent = settings.bots; saveSettings(); };
 $('diff').onchange = () => { settings.diff = +$('diff').value; saveSettings(); };
 $('frags').onchange = () => { settings.frags = +$('frags').value; saveSettings(); };

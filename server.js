@@ -1,5 +1,5 @@
 // Backrooms: Bodycam — static file server + authoritative multiplayer (WebSocket on /ws).
-// Usage: npm start   (PORT=3000 BOTS=5 DIFF=1 FRAGS=25 TIME=600 MODE=ffa|tdm)
+// Usage: npm start   (PORT=3000 BOTS=5 DIFF=1 FRAGS=25 TIME=600 MODE=ffa|tdm LIGHT=normal|dim|dark)
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,7 +24,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-const core = new GameCore({ bots: process.env.BOTS ? +process.env.BOTS : 5, difficulty: process.env.DIFF ? +process.env.DIFF : 1, fragLimit: +process.env.FRAGS || 25, timeLimit: +process.env.TIME || 600, mode: process.env.MODE === 'tdm' ? 'tdm' : 'ffa' });
+const core = new GameCore({ bots: process.env.BOTS ? +process.env.BOTS : 5, difficulty: process.env.DIFF ? +process.env.DIFF : 1, fragLimit: +process.env.FRAGS || 25, timeLimit: +process.env.TIME || 600, mode: process.env.MODE === 'tdm' ? 'tdm' : 'ffa', light: process.env.LIGHT || 'normal' });
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 });
 const encoded = new WeakMap(); // broadcast messages are serialized once
 let nextId = 1;

@@ -19,7 +19,14 @@ export function mulberry32(a) {
 // Edge arrays: h[z*W + x] = wall on the z-boundary above cell (x,z) (z in 0..H)
 //              v[z*(W+1) + x] = wall on the x-boundary left of cell (x,z) (x in 0..W)
 // 0 = open, 1 = solid wall, 2 = wall with doorway
-export function generateMap(seed, size = 18) {
+// light: 'normal' | 'dim' | 'dark' (how many troffers are dead or flickering)
+export const LIGHT_PRESETS = {
+  normal: { off: 0.05, flicker: 0.05, zones: 3, zr: [1.3, 1.2] },
+  dim: { off: 0.28, flicker: 0.1, zones: 5, zr: [1.8, 1.8] },
+  dark: { off: 0.8, flicker: 0.1, zones: 7, zr: [2.2, 2.2] },
+};
+export function generateMap(seed, size = 18, light = 'normal') {
+  const LP = LIGHT_PRESETS[light] || LIGHT_PRESETS.normal;
   const R = mulberry32(seed);
   const W = size, H = size;
   const h = new Uint8Array(W * (H + 1)).fill(1);
@@ -135,13 +142,24 @@ export function generateMap(seed, size = 18) {
   // 7) ceiling fixtures: one troffer per cell; broken + flickering ones; a few blackout zones
   const fixtures = [];
   const dark = [];
-  for (let i = 0; i < 3; i++) dark.push([R() * W, R() * H, 1.3 + R() * 1.2]);
+  for (let i = 0; i < LP.zones; i++) dark.push([R() * W, R() * H, LP.zr[0] + R() * LP.zr[1]]);
   for (let z = 0; z < H; z++) for (let x = 0; x < W; x++) {
     let state = 0; // 0 on, 1 off, 2 flicker
     const r = R();
-    if (r < 0.05) state = 1; else if (r < 0.1) state = 2;
+    if (r < LP.off) state = 1; else if (r < LP.off + LP.flicker) state = 2;
     for (const d of dark) if (Math.hypot(x + 0.5 - d[0], z + 0.5 - d[1]) < d[2] && R() < 0.85) state = 1;
     fixtures.push({ x: (x + 0.5) * CELL, z: (z + 0.5) * CELL, state, rot: (x + z) & 1 });
+  }
+
+  // rough per-cell light level (0..~1.5) for gameplay: bots see poorly in the dark
+  const cellLight = new Float32Array(W * H);
+  for (let z = 0; z < H; z++) for (let x = 0; x < W; x++) {
+    let L = 0;
+    for (let j = Math.max(0, z - 2); j <= Math.min(H - 1, z + 2); j++) for (let i = Math.max(0, x - 2); i <= Math.min(W - 1, x + 2); i++) {
+      const f = fixtures[j * W + i], I = f.state === 1 ? 0 : f.state === 2 ? 0.5 : 1;
+      if (I) L += I * Math.exp(-((i - x) ** 2 + (j - z) ** 2) * CELL * CELL / 18);
+    }
+    cellLight[z * W + x] = L;
   }
 
   // 8) loot crates in cell corners (never blocking doorways or center paths)
@@ -157,7 +175,7 @@ export function generateMap(seed, size = 18) {
   }
 
   const map = {
-    seed, W, H, h, v, boxes, lintels, grid, fixtures, crates, cellCrate, pillarCorners,
+    seed, W, H, h, v, boxes, lintels, grid, fixtures, crates, cellCrate, pillarCorners, cellLight, light,
     size: W * CELL, stamp: new Uint32Array(boxes.length), stampId: 0,
   };
   return map;

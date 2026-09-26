@@ -27,7 +27,7 @@ export const DEFAULTS = {
   name: 'Gezgin', sens: 1, adsSens: 1, invertY: false, holdAds: true, holdCrouch: true, xhair: true, hitmarks: true,
   quality: 1, fov: 80, lens: 1, shake: 1, blur: true, bright: 1, fps: false,
   master: 0.8, sfx: 1, amb: 0.8, ui: 0.9, hrtf: true,
-  bots: 6, diff: 1, frags: 20, time: 10, mode: 'ffa',
+  bots: 6, diff: 1, frags: 20, time: 10, mode: 'ffa', light: 'normal',
   binds: DEFAULT_BINDS,
 };
 
