@@ -26,14 +26,14 @@ function kf(u, keys) {
   return keys[keys.length - 1][1];
 }
 
-// hip pose, ADS eye distance to the sight point, muzzle flash size
+// hip pose, ADS eye distance to the sight point (generous eye relief keeps the gun low and the target visible), muzzle flash size
 const POSE = {
-  pistol: { hip: [0.09, -0.165, -0.41], D: 0.42, flash: 0.14 },
-  revolver: { hip: [0.09, -0.16, -0.41], D: 0.46, flash: 0.18 },
-  smg: { hip: [0.08, -0.225, -0.44], D: 0.56, flash: 0.18 },
-  shotgun: { hip: [0.08, -0.23, -0.5], D: 0.95, flash: 0.3 },
-  rifle: { hip: [0.08, -0.23, -0.5], D: 0.76, flash: 0.24 },
-  m4: { hip: [0.08, -0.225, -0.47], D: 0.22, flash: 0.2 },
+  pistol: { hip: [0.09, -0.165, -0.41], D: 0.6, flash: 0.14 },
+  revolver: { hip: [0.09, -0.16, -0.41], D: 0.62, flash: 0.18 },
+  smg: { hip: [0.08, -0.225, -0.44], D: 0.82, flash: 0.18 },
+  shotgun: { hip: [0.08, -0.23, -0.5], D: 1.3, flash: 0.3 },
+  rifle: { hip: [0.08, -0.23, -0.5], D: 1.1, flash: 0.24 },
+  m4: { hip: [0.08, -0.225, -0.47], D: 0.36, flash: 0.2 },
   sniper: { hip: [0.08, -0.24, -0.5], D: 0.34, flash: 0.28 },
   knife: { hip: [0.11, -0.165, -0.3], D: 0.4, flash: 0 },
 };

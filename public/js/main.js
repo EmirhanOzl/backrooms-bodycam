@@ -1461,7 +1461,7 @@ class Game {
     const adsF = w.scope ? lerp(1, w.adsFov, this.scopeK) * lerp(1, 0.92, me.ads) : lerp(1, w.adsFov || 1, me.ads);
     const fov = settings.fov * adsF + me.fovPunch * (1 - this.scopeK);
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); this.updatePointScale(); }
-    const vfov = lerp(70, 58, me.ads);
+    const vfov = 70; // the viewmodel is never magnified on the sights: it would cover the target
     if (Math.abs(this.vmCamera.fov - vfov) > 0.01) { this.vmCamera.fov = vfov; this.vmCamera.updateProjectionMatrix(); }
     cam.updateMatrixWorld();
     // flashlight (chest mounted, slightly right)

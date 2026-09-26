@@ -275,6 +275,8 @@ export function buildWorld(map, scene, renderer, onProgress = () => {}) {
   const bodyGeo = new THREE.BoxGeometry(CRATE_W, CRATE_H, CRATE_D);
   bodyGeo.translate(0, CRATE_H / 2, 0);
   { const ix = Array.from(bodyGeo.index.array); ix.splice(12, 6); bodyGeo.setIndex(ix); } // open top
+  // the bottom face (vertices 12..15) doubles as the inner floor: lifted off the carpet so the two never z-fight
+  { const p = bodyGeo.attributes.position; for (let k = 12; k < 16; k++) p.setY(k, 0.04); }
   const lidGeo = new THREE.BoxGeometry(CRATE_W + 0.02, 0.035, CRATE_D + 0.02);
   lidGeo.translate(0, 0.0175, (CRATE_D + 0.02) / 2);
   const nC = map.crates.length;
