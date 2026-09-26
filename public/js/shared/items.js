@@ -64,9 +64,10 @@ export const SHOP = [
   { id: 'ext', k: 'att', a: ATT.EXT, price: 120 },
   { id: 'las', k: 'att', a: ATT.LAS, price: 90 },
 ];
+const KIND = { revolver: 'toplu tabanca', smg: 'hafif makineli', shotgun: 'pompalı', rifle: 'piyade tüfeği', m4: 'karabina', sniper: 'keskin nişancı' };
 for (const s of SHOP) {
-  if (s.k === 'weapon') { s.label = WEAPONS[s.w].label; s.note = WEAPONS[s.w].slot === 'primary' ? 'birincil' : 'ikincil'; }
-  if (s.k === 'att') { const A = ATTACHMENTS.find((a) => a.bit === s.a); s.label = A.label; s.note = 'elindeki silaha takılır'; }
+  if (s.k === 'weapon') { s.label = WEAPONS[s.w].short; s.note = KIND[s.w]; }
+  if (s.k === 'att') { const A = ATTACHMENTS.find((a) => a.bit === s.a); s.label = A.label[0] + A.label.slice(1).toLocaleLowerCase('tr'); s.note = 'silaha takılır'; }
 }
 export const VENDOR_R = 1.9; // how close you must stand to use a machine
 

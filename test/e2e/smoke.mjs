@@ -24,6 +24,7 @@ try {
     g.locked = true; g.net.setPaused(false); document.getElementById('pause').classList.add('hidden');
     g.net.core.botThink = () => {}; // frozen bots: we stage the fights
   });
+  ok(await wait(() => { const x = document.getElementById('xhair'); return getComputedStyle(x).display !== 'none' && x.querySelectorAll('i').length === 4; }, null, 10000), 'crosshair is shown');
 
   // put a bot `dist` meters in front of us; face = 1 looks at us, -1 turns its back
   const stage = (dist, face, primary) => page.evaluate(async ({ dist, face, primary }) => {
@@ -68,18 +69,18 @@ try {
   const crate = await page.evaluate(async () => {
     const M = await import('/js/shared/map.js');
     const g = window.__game;
-    for (const c of g.map.crates) for (let a = 0; a < 6.28; a += 0.3) {
+    for (const c of g.map.crates) for (let a = 0; a < 6.28 && !g.world.crateState[c.id].target; a += 0.3) {
       const ux = Math.sin(a), uz = Math.cos(a);
       if (M.raycast(g.map, c.x, c.z, ux, uz, 2.2) < 2.1) continue;
       const p = M.collide(g.map, { x: c.x + ux * 1.5, z: c.z + uz * 1.5 }, 0.32);
       if (Math.hypot(p.x - c.x, p.z - c.z) < 1.3) continue;
       g.me.pos.set(p.x, 0, p.z); Object.assign(g.net.core.players.get(g.myId), { x: p.x, z: p.z });
-      g.me.yaw = Math.atan2(-(c.x - p.x), -(c.z - p.z)); g.me.pitch = -0.45;
+      g.me.yaw = Math.atan2(-(c.x - p.x), -(c.z - p.z)) + 0.25; g.me.pitch = 0; // no need to look down at it
       return c.id;
     }
     return -1;
   });
-  ok(await wait((id) => window.__game.nearCrate === id, crate, 20000), 'looking at a crate offers to open it');
+  ok(await wait((id) => window.__game.nearCrate === id, crate, 20000), 'facing a crate offers to open it');
   await page.evaluate(() => { window.__game.lastUse = -9; window.__game.interact(); });
   ok(await wait((id) => window.__game.world.crateState[id].target === 1 && window.__game.drops.size > 0, crate, 20000), 'crate opens and loot pops out');
   ok(await wait(() => [...window.__game.drops.values()].every((d) => !d.fly), null, 20000), 'loot lands on the carpet');
@@ -96,10 +97,9 @@ try {
     return !!g.shop;
   });
   ok(vend, 'looking at a vending machine opens the shop');
-  await page.evaluate(async () => {
-    const g = window.__game, { SHOP } = await import('/js/shared/items.js');
-    g.shop.sel = SHOP.findIndex((s) => s.id === 'armor'); g.lastBuy = -9; g.buySelected();
-  });
+  // the menu frees the cursor: goods are clicked
+  const armorIdx = await page.evaluate(async () => { const { SHOP } = await import('/js/shared/items.js'); window.__game.locked = false; return SHOP.findIndex((s) => s.id === 'armor'); });
+  await page.click(`#shop .card[data-i="${armorIdx}"]`);
   ok(await wait(() => { const g = window.__game; return g.me.cash < 500 && [...g.drops.values()].some((d) => d.k === 'armor' && !d.fly); }, null, 20000), 'bought plate is dispensed');
   await page.evaluate(() => {
     const g = window.__game, d = [...g.drops.values()].find((x) => x.k === 'armor');

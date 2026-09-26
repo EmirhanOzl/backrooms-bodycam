@@ -480,6 +480,48 @@ export function mergedGunGeometry(type, att = 0) {
   return gunGeoCache[key];
 }
 
+// Build every merged model the match can need (all guns with every attachment set, loot items) up front,
+// so nothing is extruded and merged in the middle of a fight. Returns the time taken (ms).
+export function prewarmModels() {
+  const t0 = performance.now();
+  for (const type of ['pistol', 'revolver', 'smg', 'shotgun', 'rifle', 'm4', 'sniper', 'knife', 'nade']) {
+    const F = ATT_FIT[type] || {};
+    const bits = [F.sup && 1, F.ext && 2, F.las && 4].filter(Boolean);
+    for (let m = 0; m < 1 << bits.length; m++) mergedGunGeometry(type, bits.reduce((a, b, i) => (m & (1 << i) ? a | b : a), 0));
+  }
+  for (const k of ['ammo', 'med', 'water', 'armor', 'nade']) mergedItemGeometry(k);
+  for (const v of [10, 50, 150]) mergedItemGeometry('cash', v);
+  for (const k of ['sup', 'ext', 'las']) attachmentGeometry(k);
+  return performance.now() - t0;
+}
+
+// ---------- attachments on their own (shop icons) ----------
+export function attachmentGeometry(key) {
+  const ck = 'att:' + key;
+  if (itemGeoCache[ck]) return itemGeoCache[ck];
+  cacheMats ||= gunMaterials();
+  const M = cacheMats, g = new THREE.Group(), p = grp(g);
+  if (key === 'sup') {
+    cylX(p, 0.02, 0, 0.19, 0, M.metal, 0, 24);
+    cylX(p, 0.021, 0, 0.02, 0, M.metal2, 0, 24);
+    cylX(p, 0.0205, 0.175, 0.19, 0, M.metal2, 0, 24);
+    for (let i = 1; i < 4; i++) cylX(p, 0.0203, 0.19 * i / 4 - 0.002, 0.19 * i / 4 + 0.002, 0, M.metal2, 0, 24);
+    cylX(p, 0.007, 0.19, 0.1905, 0, M.dark, 0, 12);
+  } else if (key === 'ext') {
+    curvedMag(p, M, M.metal2, 0.1, 0.043, 0.045, 0.27, 0.024, 6);
+    box(p, 0.064, 0.012, 0.028, 0.093, -0.272, 0, M.poly);
+    box(p, 0.05, 0.01, 0.022, 0.072, 0.004, 0, M.brass);
+  } else {
+    box(p, 0.056, 0.022, 0.027, 0, 0, 0, M.poly);
+    box(p, 0.034, 0.007, 0.022, 0, 0.014, 0, M.metal2);
+    box(p, 0.012, 0.006, 0.006, -0.018, -0.012, 0.008, M.metal2);
+    cylX(p, 0.0048, 0.028, 0.0305, 0.004, M.red, 0, 12);
+    cylX(p, 0.0038, 0.028, 0.0295, -0.005, M.glass, 0, 10);
+  }
+  itemGeoCache[ck] = mergeToVertexColors(g, 1.8);
+  return itemGeoCache[ck];
+}
+
 // ---------- loot items (origin at the bottom center, resting on the carpet) ----------
 const itemGeoCache = {};
 export const cashStacks = (v) => (v >= 100 ? 3 : v >= 45 ? 2 : 1);

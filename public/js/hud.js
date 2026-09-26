@@ -75,26 +75,48 @@ export class Hud {
     while (this.el.payout.children.length > 2) this.el.payout.firstChild.remove();
     setTimeout(() => b.remove(), 3400);
   }
-  // vending machine menu (null hides it)
-  shop(d) {
+  // vending machine menu (null hides it): clickable cards with icons; handlers {buy(i), close(), hover(i)}
+  shop(d, handlers) {
     const e = this.el.shop;
     if (!d) { e.classList.add('hidden'); return; }
-    const groups = [['GEREÇ', (it) => !['weapon', 'att'].includes(it.k)], ['SİLAH', (it) => it.k === 'weapon'], ['EKLENTİ · ' + d.weapon, (it) => it.k === 'att']];
-    let html = `<h3>BADEM SUYU OTOMATI <span>$${d.cash}</span></h3><div class="sub">Aldığın şey bölmeden yere düşer — silahları yerden al.</div>`;
-    d.items.forEach((it, i) => { it.i = i; });
+    if (handlers && !e.dataset.wired) {
+      e.dataset.wired = '1';
+      e.addEventListener('click', (ev) => {
+        const x = ev.target.closest('[data-close]');
+        if (x) { this.shopH.close(); return; }
+        const c = ev.target.closest('.card');
+        if (c) this.shopH.buy(+c.dataset.i);
+      });
+      e.addEventListener('mouseover', (ev) => { const c = ev.target.closest('.card'); if (c && c !== this.shopHover) { this.shopHover = c; this.shopH.hover(+c.dataset.i); } });
+    }
+    if (handlers) this.shopH = handlers;
+    const groups = [['GEREÇ', (it) => !['weapon', 'att'].includes(it.k)], ['SİLAHLAR', (it) => it.k === 'weapon'], [`EKLENTİLER · ${d.weapon}`, (it) => it.k === 'att']];
+    let html = `<div class="shead"><div><div class="stitle">BADEM SUYU OTOMATI</div><div class="ssub">Aldığın şey alttaki bölmeden önüne düşer.</div></div><div class="scash">$${d.cash}</div><button class="sx" data-close title="Kapat">✕</button></div>`;
     for (const [title, fn] of groups) {
-      html += `<div class="grp">${esc(title)}</div>`;
+      html += `<div class="sgrp">${esc(title)}</div><div class="cards">`;
       for (const it of d.items.filter(fn)) {
-        html += `<div class="it${it.i === d.sel ? ' sel' : ''}${it.why ? ' off' : ''}"><span class="n">${it.i < 10 ? (it.i + 1) % 10 : ''}</span><span>${esc(it.label)} <span class="note">${esc(it.note || '')}</span>${it.why && it.i === d.sel ? `<span class="why">${esc(it.why)}</span>` : ''}</span><span></span><span class="p">$${it.price}</span></div>`;
+        const hk = it.i < 10 ? `<span class="hk">${(it.i + 1) % 10}</span>` : '';
+        html += `<button type="button" class="card${it.i === d.sel ? ' sel' : ''}${it.why ? ' off' : ''}${d.flash === it.i ? ' got' : ''}" data-i="${it.i}" title="${esc(it.desc || it.note || '')}">${hk}`
+          + `<div class="ic">${d.icons[it.id] ? `<img src="${d.icons[it.id]}" alt="">` : ''}</div>`
+          + `<div class="nm">${esc(it.label)}</div><div class="nt">${esc(it.why || it.note || '')}</div><div class="pr">$${it.price}</div></button>`;
       }
+      html += '</div>';
     }
     html += d.pad
       ? '<div class="keys"><b>D-pad</b> seç · <b>A</b> satın al · <b>B</b> kapat</div>'
-      : `<div class="keys"><b>Tekerlek / ↑↓</b> seç · <b>Sol tık / Enter</b> satın al · <b>1-0</b> hızlı al · <b>${esc(keyLabel(settings.binds.use))}</b> kapat</div>`;
+      : `<div class="keys"><b>Tıkla</b> satın al · <b>1-0</b> hızlı al · <b>${esc(keyLabel(settings.binds.use))}</b> / <b>ESC</b> kapat</div>`;
     e.innerHTML = html;
     e.classList.remove('hidden');
   }
   crosshair(on) { this.set('xhair', 'display', on ? '' : 'none'); }
+  // mode: 'cross' | 'dot' | 'ads' (sights up: faint center dot only); gap in px; dim while sprinting
+  crosshairState(mode, gap, color, dim) {
+    const e = this.el.xhair, cls = mode + (dim ? ' sprint' : '');
+    if (this.xhCls !== cls) { this.xhCls = cls; e.className = cls; }
+    const g = gap.toFixed(1) + 'px';
+    if (this.xhGap !== g) { this.xhGap = g; e.style.setProperty('--gap', g); }
+    if (this.xhCol !== color) { this.xhCol = color; e.style.setProperty('--xc', color); }
+  }
   prompt(html) { this.set('prompt', 'display', html ? 'block' : 'none'); if (html) this.set('prompt', 'html', html); }
   aimName(n, friend) { this.set('aimname', 'text', n || ''); this.el.aimname.classList.toggle('friend', !!friend); }
   protect(on) { this.set('protect', 'display', on ? 'block' : 'none'); }
