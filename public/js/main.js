@@ -6,7 +6,7 @@ import { PLAYER_R, EYE_STAND, EYE_CROUCH, HEAD_STAND, HEAD_CROUCH, HEAD_R, BODY_
 import { ATT, ATTACHMENTS, SHOP, VENDOR_R, magSize, reloadMul, fitsAtt, itemLabel, SUP_DMG, LASER_SPREAD } from './shared/items.js';
 import { NADE_STEP, makeNade, stepNade, throwVelocity } from './shared/physics.js';
 import { buildWorld, bakeMaterial } from './world.js';
-import { gunMaterials, Soldier, mergedGunGeometry, mergedItemGeometry } from './models.js';
+import { gunMaterials, Soldier, mergedGunGeometry, mergedItemGeometry, prewarmModels } from './models.js';
 import { Viewmodel, FEEL } from './viewmodel.js';
 import { BodycamPost } from './post.js';
 import { Particles, Decals, Tracers, MuzzleSprites, Shells, Motes, Lasers } from './effects.js';
@@ -15,6 +15,7 @@ import { Sound } from './audio.js';
 import { Net } from './net.js';
 import { Hud, esc } from './hud.js';
 import { Pad, BTN } from './gamepad.js';
+import { shopIcons } from './icons.js';
 import { settings, saveSettings, buildSettingsPanel, buildControls, keyLabel, ALT_KEYS } from './settings.js';
 import { recordKill, recordDeath, recordMatch, addTime, saveCareer, careerHtml, resetCareer, randomTip } from './career.js';
 
@@ -33,6 +34,7 @@ const LOCAL_LAT = 0.02;   // constant latency on our own gunshots keeps full-aut
 const STREAKS = { 2: 'ÇİFTE LEŞ', 3: 'ÜÇLÜ LEŞ', 5: 'DURDURULAMAZ', 7: 'EFSANEVİ', 10: 'SEVİYE 0\'IN KABUSU' };
 const SLOT_ACTIONS = { slot1: 'primary', slot2: 'secondary', slot3: 'melee' };
 const SLOT_ORDER = ['primary', 'secondary', 'melee'];
+const XH_COLORS = { white: '#ffffff', green: '#6dff7a', cyan: '#5ef2ff', red: '#ff4b4b', yellow: '#ffe14d' };
 const SHELL_KIND = { pistol: 'pistol', smg: 'pistol', rifle: 'rifle', m4: 'rifle', sniper: 'rifle', shotgun: 'hull' };
 
 function mkSlot(w, mag, res, a = 0) {
@@ -160,6 +162,9 @@ class Game {
     this.loadProgress('Seviye 0 üretiliyor, ışıklar pişiriliyor…', 0.2);
     await nextFrame();
     this.loadLevel((Math.random() * 1e9) | 0, 18);
+    this.loadProgress('Modeller hazırlanıyor…', 0.4);
+    await nextFrame();
+    console.log('models ms', Math.round(prewarmModels()));
     await soundP;
     this.applyAudioSettings();
     this.loadProgress('Hazır', 1);
@@ -279,14 +284,12 @@ class Game {
     for (const m of pending) this.onMsg(m);
     this.loadProgress('Işıklar ısınıyor…', 0.9);
     await nextFrame();
-    this.renderer.compile(this.scene, this.camera);
-    this.renderer.compile(this.vmScene, this.vmCamera);
+    this.warmup();
     this.state = 'game';
     this.starting = false;
     this.lostShown = false;
     $('menu').classList.add('hidden');
     this.hud.show(true);
-    this.hud.crosshair(settings.xhair);
     this.vm.root.visible = true;
     this.loading(false);
     this.sound.setHum?.(0.9);
@@ -297,6 +300,26 @@ class Game {
     this.sendT = 0; this.pingT = 0;
   }
 
+  // Compile every shader the match can need now (hidden models, loot, lasers, flashlight beams...),
+  // not the first time something shows up mid-fight.
+  warmup() {
+    const hidden = [];
+    for (const sc of [this.scene, this.vmScene]) sc.traverse((o) => { if (!o.visible) { o.visible = true; hidden.push(o); } });
+    const temp = new THREE.Group();
+    const mat = bakeMaterial({ vertexColors: true, color: 0xffffff, shininess: 30, specular: 0x333333 }, { uniform: true, phong: true });
+    temp.add(new THREE.Mesh(mergedItemGeometry('ammo'), mat), new THREE.Mesh(mergedGunGeometry('m4', 7).geo, mat));
+    temp.position.set(this.map.size / 2, -5, this.map.size / 2);
+    this.scene.add(temp);
+    this.lasers.begin(); this.lasers.add(this.v1.set(0, -5, 0), this.v2.set(1, -5, 0), this.v1, 1); this.lasers.end();
+    const t0 = performance.now();
+    this.renderer.compile(this.scene, this.camera);
+    this.renderer.compile(this.vmScene, this.vmCamera);
+    console.log('warmup ms', Math.round(performance.now() - t0));
+    this.scene.remove(temp); mat.dispose();
+    for (const o of hidden) o.visible = false;
+    this.lasers.begin(); this.lasers.end();
+  }
+
   quitToMenu() {
     saveCareer();
     if (this.net) this.net.close();
@@ -305,7 +328,7 @@ class Game {
     this.remotes.clear(); this.names.clear(); this.events.length = 0;
     this.clearCorpses();
     for (const L of this.remoteFlash) L.intensity = 0;
-    this.clearDrops(); this.clearNades(); this.closeShop();
+    this.clearDrops(); this.clearNades(); this.closeShop(false);
     this.me = this.newMe();
     this.particles.clear(); this.fire.clear(); this.tracers.clear();
     $('score').classList.add('hidden');
@@ -332,7 +355,7 @@ class Game {
     this.serial = 'X' + (seed >>> 0).toString(16).toUpperCase().padStart(8, '0').slice(0, 8);
     this.hud.clock(this.serial);
     this.decals.clear(); this.blood.clear(); this.scorch.clear();
-    this.clearDrops(); this.clearNades(); this.closeShop(); this.clearCorpses();
+    this.clearDrops(); this.clearNades(); this.closeShop(false); this.clearCorpses();
     this.nearCrate = -1; this.nearDrop = null; this.nearVendor = null;
     for (const r of this.remotes.values()) { r.buf.length = 0; }
   }
@@ -353,7 +376,6 @@ class Game {
   onSetting(k) {
     if (k === 'quality') this.applyQuality();
     if (['master', 'sfx', 'amb', 'ui', 'hrtf'].includes(k)) this.applyAudioSettings();
-    if (k === 'xhair') this.hud.crosshair(settings.xhair);
   }
 
   resize() {
@@ -373,8 +395,13 @@ class Game {
 
   lock() {
     if (this.state !== 'game' || this.locked) return;
-    // newer Chrome returns a Promise that rejects during the post-ESC cooldown; older API returns void
-    Promise.resolve(this.canvas.requestPointerLock?.()).catch(() => $('pause').classList.remove('hidden'));
+    // newer Chrome returns a Promise that rejects during the post-ESC cooldown; older API returns void.
+    // Raw (unaccelerated) input also avoids the occasional huge jump some mice report through the OS path.
+    const c = this.canvas;
+    const req = (opts) => { try { return Promise.resolve(opts ? c.requestPointerLock?.(opts) : c.requestPointerLock?.()); } catch (e) { return Promise.reject(e); } };
+    req(settings.rawInput ? { unadjustedMovement: true } : null)
+      .catch((e) => (e && e.name === 'NotSupportedError' ? req(null) : Promise.reject(e)))
+      .catch(() => this.refreshPause(true));
   }
 
   // ------------------------------------------------------------------ input
@@ -384,10 +411,15 @@ class Game {
     document.addEventListener('keydown', resumeAudio);
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.canvas;
-      if (!this.locked) { this.mouse.l = this.mouse.r = false; this.keys = {}; this.me.nadeHeld = false; this.pad.active = false; this.padPaused = false; }
+      if (!this.locked) {
+        this.mouse.l = this.mouse.r = false; this.keys = {}; this.me.nadeHeld = false; this.padPaused = false;
+        if (!this.shopUnlock) this.pad.active = false;
+      }
+      this.shopUnlock = false;
+      if (this.locked && this.shop) this.closeShop(false); // clicked back into the game
       this.refreshPause(true);
     });
-    document.addEventListener('pointerlockerror', () => { if (this.state === 'game') $('pause').classList.remove('hidden'); });
+    document.addEventListener('pointerlockerror', () => { if (this.state === 'game') this.refreshPause(true); });
     document.addEventListener('visibilitychange', () => { if (this.state === 'game') this.net?.setPaused(document.hidden || this.isPaused()); });
     // Ctrl is crouch: guard against Ctrl+W closing the tab mid-match
     window.addEventListener('beforeunload', (e) => { saveCareer(); if (this.state === 'game' && !this.quitting) { e.preventDefault(); e.returnValue = ''; } });
@@ -399,6 +431,11 @@ class Game {
     $('btnPauseBack').onclick = () => this.showPauseMain();
     document.addEventListener('mousemove', (e) => {
       if (!this.locked || this.state !== 'game') return;
+      // drop the rare bogus jump some browsers / mice report (hundreds of pixels in one event out of nowhere)
+      const mag = Math.abs(e.movementX) + Math.abs(e.movementY);
+      const spike = mag > 300 && mag > (this.mouseAvg || 0) * 8 + 120;
+      this.mouseAvg = (this.mouseAvg || 0) * 0.85 + Math.min(mag, 300) * 0.15;
+      if (spike) return;
       const me = this.me;
       const zoom = this.camera.fov / settings.fov;
       const s = 0.0021 * settings.sens * zoom * (me.ads > 0.5 ? settings.adsSens : 1);
@@ -408,15 +445,13 @@ class Game {
     });
     document.addEventListener('mousedown', (e) => {
       if (!this.locked) return;
-      if (this.shop) { if (e.button === 0) this.buySelected(); else if (e.button === 2) this.closeShop(); return; }
       if (e.button === 0) { this.mouse.l = true; this.fresh.l = true; }
       if (e.button === 2) { this.mouse.r = true; this.fresh.r = true; this.me.adsToggle = !this.me.adsToggle; }
     });
     document.addEventListener('mouseup', (e) => { if (e.button === 0) this.mouse.l = false; if (e.button === 2) this.mouse.r = false; });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('wheel', (e) => {
-      if (!this.locked || this.state !== 'game') return;
-      if (this.shop) { this.shopMove(e.deltaY > 0 ? 1 : -1); return; }
+      if (!this.locked || this.state !== 'game' || this.shop) return;
       const me = this.me, owned = SLOT_ORDER.filter((s) => me.inv[s]);
       const i = owned.indexOf(me.pendingSlot || me.slot);
       this.equip(owned[(i + (e.deltaY > 0 ? 1 : -1) + owned.length) % owned.length]);
@@ -426,10 +461,10 @@ class Game {
       const act = this.actionOf(e.code);
       if (act === 'score' || e.code === 'Tab') e.preventDefault();
       if (act === 'score') { this.scoreOpen = true; this.renderScore(); return; }
+      if (this.shop) { if (!e.repeat && this.shopKey(e.code, act)) e.preventDefault(); return; }
       if (!this.locked) return;
       if (e.code === 'Space' || e.code.startsWith('Arrow') || e.ctrlKey || e.altKey) e.preventDefault();
       if (e.repeat) return;
-      if (this.shop && this.shopKey(e.code, this.actionOf(e.code))) return;
       this.keys[e.code] = true;
       const me = this.me;
       if (!settings.holdCrouch && act === 'crouch') me.crouchToggle = !me.crouchToggle;
@@ -457,7 +492,7 @@ class Game {
   }
   down(a) { if (this.keys[settings.binds[a]]) return true; const alt = ALT_KEYS[a]; return !!alt && alt.some((c) => this.keys[c]); }
   // paused = no mouse lock and no gamepad in use, or paused from the gamepad's Menu button
-  isPaused() { return this.state === 'game' && (this.padPaused || (!this.locked && !this.pad.active)); }
+  isPaused() { return this.state === 'game' && (this.padPaused || (!this.locked && !this.pad.active && !this.shop)); }
   refreshPause(reset) {
     const paused = this.isPaused();
     const el = $('pause'), was = !el.classList.contains('hidden');
@@ -621,16 +656,23 @@ class Game {
   fullText(d) { return { ammo: 'MERMİN DOLU', nade: 'EN FAZLA 2 EL BOMBASI', med: 'SAĞLIĞIN DOLU', water: 'SAĞLIĞIN DOLU', armor: 'ZIRHIN DOLU' }[d.k] || ''; }
 
   // ------------------------------------------------------------------ vending machine
+  // The machine menu frees the mouse cursor: goods are clicked. The match keeps running (it is not a pause).
   openShop(v) {
-    this.shop = { v, sel: this.shop?.sel ?? 0 };
-    this.me.adsToggle = false; this.mouse.l = false;
+    this.shop = { v, sel: this.shop?.sel ?? 0, flash: -1 };
+    const me = this.me;
+    me.adsToggle = false; me.nadeHeld = false; this.mouse.l = this.mouse.r = false;
     this.sound.ui('ui_click', 0.4);
+    if (this.locked) { this.shopUnlock = true; document.exitPointerLock(); }
     this.renderShop();
   }
-  closeShop() {
+  // relock: called from a click / key press, so the pointer can be captured again right away
+  closeShop(relock = true) {
     if (!this.shop) return;
     this.shop = null;
     this.hud.shop(null);
+    this.sound.ui('ui_click', 0.3);
+    if (relock && !this.locked && !this.pad.active && this.state === 'game') this.lock(); // refreshes on pointerlockchange / error
+    else this.refreshPause();
   }
   shopMove(dir) {
     if (!this.shop) return;
@@ -639,12 +681,12 @@ class Game {
     this.renderShop();
   }
   shopKey(code, act) {
-    if (code === 'ArrowUp') { this.shopMove(-1); return true; }
-    if (code === 'ArrowDown') { this.shopMove(1); return true; }
-    if (code === 'Enter' || code === 'NumpadEnter') { this.buySelected(); return true; }
+    if (code === 'ArrowUp' || code === 'ArrowLeft') { this.shopMove(-1); return true; }
+    if (code === 'ArrowDown' || code === 'ArrowRight') { this.shopMove(1); return true; }
+    if (code === 'Enter' || code === 'NumpadEnter') { this.buyIndex(this.shop.sel); return true; }
     const n = /^(Digit|Numpad)(\d)$/.exec(code);
-    if (n) { const i = (+n[2] + 9) % 10; if (i < SHOP.length) { this.shop.sel = i; this.buySelected(); } return true; }
-    if (act === 'use' || code === 'Backspace') { this.closeShop(); return true; }
+    if (n) { const i = (+n[2] + 9) % 10; if (i < SHOP.length) this.buyIndex(i); return true; }
+    if (act === 'use' || code === 'Escape' || code === 'Backspace') { this.closeShop(); return true; }
     return false;
   }
   // why an item can't be bought right now ('' = it can)
@@ -660,17 +702,28 @@ class Game {
     if (it.k === 'weapon') { const held = me.inv[WEAPONS[it.w].slot]; if (held && held.w === it.w) return 'ZATEN SENDE'; }
     return '';
   }
-  buySelected() {
-    if (!this.shop) return;
-    const it = SHOP[this.shop.sel], why = this.shopBlock(it);
-    if (why) { this.hud.toast(why, 'bad'); this.sound.ui('ui_nope', 0.4); return; }
-    if (this.time - (this.lastBuy || 0) < 0.3) return;
+  buySelected() { if (this.shop) this.buyIndex(this.shop.sel); }
+  buyIndex(i) {
+    if (!this.shop || !SHOP[i]) return;
+    this.shop.sel = i;
+    const it = SHOP[i], why = this.shopBlock(it);
+    if (why) { this.hud.toast(why, 'bad'); this.sound.ui('ui_nope', 0.4); this.renderShop(); return; }
+    if (this.time - (this.lastBuy || 0) < 0.25) return;
     this.lastBuy = this.time;
+    this.shop.flash = i;
     this.net.send({ t: 'buy', id: it.id, v: this.shop.v.id, w: this.curType() });
+    this.renderShop();
+    this.shop.flash = -1;
   }
   renderShop() {
     if (!this.shop) return;
-    this.hud.shop({ items: SHOP.map((it) => ({ ...it, why: this.shopBlock(it) })), sel: this.shop.sel, cash: this.me.cash, weapon: WEAPONS[this.curType()].short, pad: this.pad.active && !this.locked });
+    this.shopIcons ||= shopIcons(this.renderer, SHOP);
+    const items = SHOP.map((it, i) => ({ ...it, i, why: this.shopBlock(it), desc: it.k === 'att' ? ATTACHMENTS.find((x) => x.bit === it.a)?.desc : '' }));
+    this.hud.shop({ items, sel: this.shop.sel, flash: this.shop.flash, cash: this.me.cash, weapon: WEAPONS[this.curType()].short, pad: this.pad.active && !this.locked, icons: this.shopIcons }, this.shopHandlers ||= {
+      buy: (i) => this.buyIndex(i),
+      close: () => this.closeShop(),
+      hover: () => this.sound.ui('ui_hover', 0.2),
+    });
   }
 
   onVmEvent(e, anim) {
@@ -795,7 +848,7 @@ class Game {
         me.kickP = me.kickY = 0; me.stamina = 1; me.exhausted = false; me.breath = 1; me.ads = 0; me.adsToggle = false; me.streak = 0;
         me.protectUntil = this.time + PROTECT_T; me.nadeHeld = false; me.cooking = false;
         if (m.cash != null) { me.cash = m.cash; this.hud.cash(me.cash); }
-        this.closeShop(); me.dp = null;
+        this.closeShop(false); me.dp = null;
         me.inv = { primary: m.inv?.p ? mkSlot(m.inv.p) : null, secondary: mkSlot(m.inv?.s || 'pistol'), melee: mkSlot('knife'), nades: m.inv?.n ?? 1 };
         this.vm.stop();
         this.setWeapon(me.inv.primary ? 'primary' : 'secondary');
@@ -913,7 +966,7 @@ class Game {
         this.hud.banner('');
         this.fragLimit = m.fragLimit ?? this.fragLimit; this.timeLimit = m.timeLimit ?? this.timeLimit;
         this.loadLevel(m.seed, m.size, m.light);
-        this.renderer.compile(this.scene, this.camera);
+        this.warmup();
         this.hud.toast('YENİ SEVİYE');
         return;
       case 'pong': this.ping = Math.round(performance.now() - m.c); return;
@@ -964,6 +1017,7 @@ class Game {
     this.hud.feed(m.k, m.v, m.w, zone, this.myId, this.names, this.mode === 'tdm' ? this.myTeam : null);
     if (m.v === this.myId) {
       me.alive = false; me.deathAt = this.time; me.hp = 0; me.ads = 0; me.nadeHeld = false; me.cooking = false; me.reloading = false;
+      this.closeShop(false);
       me.deathYaw = me.yaw;
       me.killerPos = m.k !== m.v ? m.kp : null;
       // the body camera goes where the body goes
@@ -1272,10 +1326,9 @@ class Game {
     const base = this.fwd.set(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
     const right = this.rgt.set(Math.cos(yaw), 0, -Math.sin(yaw));
     const up = this.upv.crossVectors(right, base);
-    const moving = Math.min(1, Math.hypot(me.vel.x, me.vel.z) / 3.3);
     const ads = w.scope ? smoothstep(0.75, 0.98, me.ads) : me.ads;
-    const att = s.a | 0, sup = !!(att & ATT.SUP), las = att & ATT.LAS ? lerp(LASER_SPREAD, 1, ads) : 1;
-    const spread = (lerp(w.spread, w.adsSpread, ads) * (me.crouch ? 0.8 : 1) + moving * w.moveSpread * (1 - ads * 0.5) * (las < 1 ? 0.7 : 1) + (me.onGround ? 0 : 0.06) + me.bloom * w.spread * 0.7) * las;
+    const sup = !!((s.a | 0) & ATT.SUP);
+    const spread = this.aimSpread(s, w);
     me.bloom = Math.min(1.6, me.bloom + (w.modes[0] === 'auto' ? 0.28 : 0.4));
     const hits = new Map(), rank = { l: 0, b: 1, h: 2 };
     const muzzleW = this.vmToWorld(this.vm.muzzle(this.v3));
@@ -1341,6 +1394,16 @@ class Game {
       this.sound.play('sh_brass', { cat: 'mech', vol: 0.14, when: this.sound.now() + 0.4 + Math.random() * 0.2 });
     }
     if (s.mag === 0 && type === 'pistol') me.slideBack = true;
+  }
+
+  // cone half-angle (rad) of the weapon in hand right now; the crosshair opens by the same amount
+  aimSpread(s = this.cur(), w = WEAPONS[s.w]) {
+    const me = this.me;
+    if (w.melee) return 0.01;
+    const ads = w.scope ? smoothstep(0.75, 0.98, me.ads) : me.ads;
+    const las = (s.a | 0) & ATT.LAS ? lerp(LASER_SPREAD, 1, ads) : 1;
+    const moving = Math.min(1, Math.hypot(me.vel.x, me.vel.z) / 3.3);
+    return (lerp(w.spread, w.adsSpread, ads) * (me.crouch ? 0.8 : 1) + moving * w.moveSpread * (1 - ads * 0.5) * (las < 1 ? 0.7 : 1) + (me.onGround ? 0 : 0.06) + me.bloom * w.spread * 0.7) * las;
   }
 
   knifeHit(heavy) {
@@ -1424,8 +1487,9 @@ class Game {
   // ------------------------------------------------------------------ frame
   frame(now) {
     requestAnimationFrame(this.frameCb);
-    const dt = clamp((now - this.last) / 1000, 0, 0.05);
+    const raw = (now - this.last) / 1000, dt = clamp(raw, 0, 0.05);
     this.last = now;
+    if (raw > 0.12 && this.state === 'game') { (this.hitches ||= []).push({ t: +this.time.toFixed(1), ms: Math.round(raw * 1000) }); if (this.hitches.length > 30) this.hitches.shift(); }
     this.time += dt;
     this.fpsN = (this.fpsN || 0) + 1;
     if (!this.fpsAt) this.fpsAt = now;
@@ -1604,43 +1668,61 @@ class Game {
     const wallD = raycast(this.map, me.pos.x, me.pos.z, fx, fz, 1.2);
     me.block = damp(me.block, clamp((0.72 - wallD) / 0.35, 0, 1) * (1 - me.ads * 0.6), 10, dt);
     this.findInteractable();
-    // walking over health, armor, grenades, ammo and money takes them when they are useful
+    // walking over health, armor, grenades, ammo and money takes them when they are useful;
+    // a gun is taken the same way when its slot is empty (or it is the one in hand and you need its ammo)
     for (const d of this.drops.values()) {
-      if (d.k === 'weapon' || d.fly || this.time < (d.tryAt || 0)) continue;
-      if (Math.abs(d.x - me.pos.x) > 0.9 || Math.abs(d.z - me.pos.z) > 0.9 || Math.hypot(d.x - me.pos.x, d.z - me.pos.z) > 0.8) continue;
-      if (!this.useful(d)) continue;
+      if (d.fly || this.time < (d.tryAt || 0)) continue;
+      const dx = d.x - me.pos.x, dz = d.z - me.pos.z;
+      if (Math.abs(dx) > 1.1 || Math.abs(dz) > 1.1 || Math.hypot(dx, dz) > (d.k === 'weapon' ? 0.8 : 1.0)) continue;
+      if (d.k === 'weapon') {
+        const W = WEAPONS[d.w], held = me.inv[W.slot];
+        if (held && !(held.w === d.w && held.res < W.maxReserve)) continue;
+      } else if (!this.useful(d)) continue;
       d.tryAt = this.time + 0.5;
       this.net.send({ t: 'pickup', id: d.id });
     }
-    if (this.shop && (!this.nearShop(this.shop.v) || this.endData)) this.closeShop();
+    if (this.shop && (!this.nearShop(this.shop.v) || this.endData)) this.closeShop(false);
   }
 
   // what the player is looking at within reach: an item on the carpet, a crate or a vending machine
+  // what the player is turned toward within reach: an item on the carpet, a crate or a vending machine.
+  // Only the heading counts (no need to look down at the floor and lose your aim); looking at the ceiling uses nothing.
   findInteractable() {
-    const me = this.me, eye = this.eyePos(this.v1);
-    const cp = Math.cos(me.pitch), fx = -Math.sin(me.yaw) * cp, fy = Math.sin(me.pitch), fz = -Math.cos(me.yaw) * cp;
-    let best = null, bestS = 1;
-    // score < 1 means "inside the look cone"; the cone widens up close. obj: ['drop'|'crate'|'vendor', target]
-    const consider = (x, y, z, radius, reach, obj) => {
-      const dx = x - eye.x, dy = y - eye.y, dz = z - eye.z, hd = Math.hypot(dx, dz), d = Math.hypot(hd, dy);
-      if (hd > reach || d < 1e-3) return;
-      const ang = Math.acos(clamp((dx * fx + dy * fy + dz * fz) / d, -1, 1));
-      const sc = ang / (Math.atan(radius / d) + 0.07) + hd * 0.04;
-      if (sc >= bestS) return;
-      if (hd > 0.35 && raycast(this.map, me.pos.x, me.pos.z, dx / hd, dz / hd, hd) < hd - 0.05) return;
-      bestS = sc; best = obj;
-    };
-    for (const d of this.drops.values()) {
-      if (d.fly) continue;
-      consider(d.x, d.restY + 0.05, d.z, d.k === 'weapon' ? 0.3 : 0.2, 2.4, ['drop', d]);
+    const me = this.me, px = me.pos.x, pz = me.pos.z, fx = -Math.sin(me.yaw), fz = -Math.cos(me.yaw);
+    let kind = 0, target = null, bestS = 1;
+    if (me.pitch < 0.6) {
+      for (const d of this.drops.values()) {
+        if (d.fly) continue;
+        // guns first: the rest is taken by walking over it anyway
+        const sc = this.useScore(px, pz, fx, fz, d.x, d.z, 1.9, d.k === 'weapon' ? 0.3 : 0.2) + (d.k === 'weapon' ? 0 : 0.15);
+        if (sc < bestS) { bestS = sc; kind = 1; target = d; }
+      }
+      const cr = this.map.crates;
+      for (let i = 0; i < cr.length; i++) {
+        if (this.world.crateState[i].target) continue;
+        const sc = this.useScore(px, pz, fx, fz, cr[i].x, cr[i].z, 2.0, 0.4);
+        if (sc < bestS) { bestS = sc; kind = 2; target = i; }
+      }
     }
-    this.map.crates.forEach((c, i) => { if (!this.world.crateState[i].target) consider(c.x, 0.28, c.z, 0.38, 2.1, ['crate', i]); });
-    for (const v of this.map.vendors) if (this.nearShop(v)) consider(v.x + v.nx * 0.33, 1.1, v.z + v.nz * 0.33, 0.75, 2.8, ['vendor', v]);
-    // a gun right at your feet is taken even without aiming at it (gamepad friendly)
-    if (!best) for (const d of this.drops.values()) if (d.k === 'weapon' && !d.fly && Math.hypot(d.x - me.pos.x, d.z - me.pos.z) < 0.75) { best = ['drop', d]; break; }
-    this.nearDrop = best && best[0] === 'drop' ? best[1] : null;
-    this.nearCrate = best && best[0] === 'crate' ? best[1] : -1;
-    this.nearVendor = best && best[0] === 'vendor' ? best[1] : null;
+    for (const v of this.map.vendors) {
+      if (!this.nearShop(v)) continue;
+      const sc = this.useScore(px, pz, fx, fz, v.x + v.nx * 0.33, v.z + v.nz * 0.33, 2.8, 0.6);
+      if (sc < bestS) { bestS = sc; kind = 3; target = v; }
+    }
+    this.nearDrop = kind === 1 ? target : null;
+    this.nearCrate = kind === 2 ? target : -1;
+    this.nearVendor = kind === 3 ? target : null;
+  }
+  // < 1: inside a generous cone around the heading (wider for close / big things); 9: out of reach or behind a wall
+  useScore(px, pz, fx, fz, x, z, reach, radius) {
+    const dx = x - px, dz = z - pz, d = Math.hypot(dx, dz);
+    if (d > reach) return 9;
+    if (d < 0.35) return 0.2 + d; // right at your feet
+    const c = (dx * fx + dz * fz) / d;
+    if (c <= 0) return 9;
+    const sc = Math.acos(Math.min(1, c)) / (Math.atan(radius / d) + 0.45) + d * 0.08;
+    if (sc >= 1 || raycast(this.map, px, pz, dx / d, dz / d, d) < d - 0.05) return 9;
+    return sc;
   }
   nearShop(v) {
     const me = this.me, dx = me.pos.x - (v.x + v.nx * 0.6), dz = me.pos.z - (v.z + v.nz * 0.6);
@@ -1925,7 +2007,6 @@ class Game {
       hud.vitals(me.hp, me.armor, me.holdBreath || (this.scopeK > 0.6) ? me.breath : me.stamina);
       hud.weapon(s.w, s.mode, s.mag, s.res, me.reloading, w.mag || 1);
       hud.slots(me.inv, me.pendingSlot || me.slot);
-      hud.crosshair(settings.xhair && me.ads < 0.5 && me.alive);
       hud.protect(me.alive && this.time < me.protectUntil);
       const useKey = this.pad.active && !this.locked ? 'X' : keyLabel(settings.binds.use);
       const d = this.nearDrop;
@@ -1950,6 +2031,7 @@ class Game {
         this.aimOnFoe = res.kind === 'player' && !this.isFriend(res.id);
       } else hud.aimName('');
     }
+    this.updateCrosshair();
     hud.cook(me.cooking ? me.cookT / GRENADE.fuse : 0);
     if (me.alive && me.hp < 35) {
       me.beatT -= dt;
@@ -1960,6 +2042,19 @@ class Game {
       me.breathT -= dt;
       if (me.breathT <= 0) { me.breathT = 0.8 + tired * 1.6; this.sound.ui('breath', 0.3 * (1 - tired)); }
     }
+  }
+
+  updateCrosshair() {
+    const me = this.me, s = this.cur(), w = WEAPONS[s.w], st = settings.xstyle;
+    const sights = me.ads > 0.5 && !w.melee;
+    // scope and red dot bring their own reticle; iron sights keep a faint dot on the aim point
+    const on = st !== 'off' && me.alive && !this.shop && !this.endData && !(sights && (w.scope || s.w === 'm4'));
+    this.hud.crosshair(on);
+    if (!on) return;
+    const fov = THREE.MathUtils.degToRad(this.camera.fov), zoom = Math.max(0.5, this.post.final.uniforms.uZoom.value);
+    const gap = (Math.tan(this.aimSpread(s, w)) / Math.tan(fov / 2)) * (innerHeight / 2) / zoom;
+    const mode = sights ? 'ads' : st === 'dot' || w.melee ? 'dot' : 'cross';
+    this.hud.crosshairState(mode, clamp(gap, 3, 90), XH_COLORS[settings.xcolor] || '#fff', me.sprintK > 0.5 || me.reloading);
   }
 
   renderScore() {

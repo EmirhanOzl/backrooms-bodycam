@@ -24,7 +24,7 @@ export function keyLabel(code) {
 }
 
 export const DEFAULTS = {
-  name: 'Gezgin', sens: 1, adsSens: 1, invertY: false, holdAds: true, holdCrouch: true, xhair: true, hitmarks: true,
+  name: 'Gezgin', sens: 1, adsSens: 1, rawInput: true, invertY: false, holdAds: true, holdCrouch: true, xhair: true, xstyle: 'cross', xcolor: 'white', hitmarks: true,
   quality: 1, fov: 80, lens: 1, shake: 1, blur: true, bright: 1, fps: false,
   master: 0.8, sfx: 1, amb: 0.8, ui: 0.9, hrtf: true,
   bots: 6, diff: 1, frags: 20, time: 10, mode: 'ffa', light: 'normal',
@@ -38,6 +38,7 @@ function load() {
   const s = { ...DEFAULTS };
   for (const k of Object.keys(DEFAULTS)) if (saved[k] != null && typeof saved[k] === typeof DEFAULTS[k]) s[k] = saved[k];
   s.binds = { ...DEFAULT_BINDS, ...(saved.binds && typeof saved.binds === 'object' ? saved.binds : {}) };
+  if (saved.xhair === false && saved.xstyle == null) s.xstyle = 'off'; // older saves: the dot could be turned off
   return s;
 }
 export const settings = load();
@@ -50,10 +51,12 @@ const SCHEMA = [
       { k: 'name', label: 'Operatör adı', type: 'text' },
       { k: 'sens', label: 'Fare hassasiyeti', type: 'range', min: 0.1, max: 4, step: 0.05, fmt: (v) => v.toFixed(2) },
       { k: 'adsSens', label: 'Nişan / dürbün hassasiyeti', type: 'range', min: 0.3, max: 1.6, step: 0.05, fmt: (v) => v.toFixed(2) },
+      { k: 'rawInput', label: 'Ham fare girişi', type: 'check', hint: 'İşletim sisteminin fare ivmesini atlar; nişan tutarlı olur. Bir sonraki tıklamada geçerli olur.' },
       { k: 'invertY', label: 'Y eksenini ters çevir', type: 'check' },
       { k: 'holdAds', label: 'Nişan alma (sağ tık)', type: 'select', opts: [[true, 'Basılı tut'], [false, 'Aç / kapat']] },
       { k: 'holdCrouch', label: 'Çömelme', type: 'select', opts: [[true, 'Basılı tut'], [false, 'Aç / kapat']] },
-      { k: 'xhair', label: 'Nişangah noktası', type: 'check' },
+      { k: 'xstyle', label: 'Nişangah', type: 'select', opts: [['cross', 'Artı (isabete göre açılır)'], ['dot', 'Nokta'], ['off', 'Kapalı']] },
+      { k: 'xcolor', label: 'Nişangah rengi', type: 'select', opts: [['white', 'Beyaz'], ['green', 'Yeşil'], ['cyan', 'Camgöbeği'], ['red', 'Kırmızı'], ['yellow', 'Sarı']] },
       { k: 'hitmarks', label: 'Vuruş işaretleri', type: 'check' },
     ],
   },

@@ -48,7 +48,7 @@ Aşağıdakiler varsayılanlardır.
 | R | şarjör değiştir |
 | B | atış modu (otomatik / 3'lü / tek atış) |
 | G veya 4 | el bombası — basılı tut: pimi çek ve beklet (pişir), bırak: at |
-| F | baktığın şeyi kullan: kutu aç · yerdeki silahı al / değiştir · otomatı aç |
+| F | önündekini kullan (aşağı bakmana gerek yok): kutu aç · yerdeki silahı al / değiştir · otomatı aç |
 | T | fener |
 | V | silahı incele |
 | 1 / 2 / 3, tekerlek | birincil / ikincil / bıçak |
@@ -103,15 +103,18 @@ Eklentiler silahta kalır: silah yere düşerse (ölünce ya da değiştirince) 
 ### Ganimet → para → otomat döngüsü
 
 - **Her şey fiziksel:** kutudan, cesetten ya da otomattan çıkan eşyalar havaya fırlar, halıya düşer ve orada durur.
-  Silahlara **bakıp F** ile alırsın (yuvan doluysa eldeki yere bırakılır); ilk yardım, badem suyu, zırh plakası,
-  el bombası, mermi kutusu ve para **üzerinden geçince** — işine yarıyorsa — alınır. Bakılan eşya hafifçe parlar.
+  Silaha **dönük dur ve F**'ye bas — nişanını bozup yere bakmana gerek yok (yuvan doluysa eldeki yere bırakılır).
+  O yuvan boşsa ya da elindeki silahın aynısıysa (mermi olarak) **üzerinden geçmen** yeterli. İlk yardım, badem suyu,
+  zırh plakası, el bombası, mermi kutusu ve para da üzerinden geçince — işine yarıyorsa — alınır. Seçili eşya hafifçe parlar.
 - **Kutular** bir ana eşya (silah, mermi, el bombası, ilk yardım, badem suyu, zırh) ve çoğu zaman biraz para verir;
   40 sn sonra yeniden dolar. Kutudan çıkan silah da yere düşer — kimse eline zorla silah tutuşturmaz.
 - **Para:** leş başına $100 ve stil bonusları — KAFADAN, SIRTTAN BIÇAK, BIÇAKLA, UÇURDU (el bombası), UZAK ATIŞ (25 m+),
   HAVADA, DÜRBÜNSÜZ (R700 nişan almadan), ÇOKLU LEŞ, İNTİKAM, İLK KAN, SERİ BİTİRİCİ, SON NEFES. Kazanç ekranda kalem
   kalem akar. Ölünce paranın dörtte biri cesedin yanına saçılır.
-- **Badem suyu otomatları** (her seviyede 4 tane, duvar diplerinde, ışıkları uzaktan görünür): bakıp F ile aç;
-  sağlık, zırh, mermi, el bombası, her silah ve eklentiler satılır. Aldığın şey bölmeden yuvarlanarak önüne düşer.
+- **Badem suyu otomatları** (her seviyede 4 tane, duvar diplerinde, ışıkları uzaktan görünür): önünde F ile aç.
+  Menü resimli kartlardan oluşur, imleç serbest kalır: istediğine **tıkla** (ya da 1-0 kısayolları), F / ESC ile kapat.
+  Sağlık, zırh, mermi, el bombası, her silah ve eklentiler satılır; aldığın şey bölmeden yuvarlanarak önüne düşer.
+  Maç sen alışveriş yaparken durmaz.
   Botlar da para biriktirip otomattan silah ve zırh alır.
 - **Cesetler savrulur:** öldüren darbe gövdeyi fırlatır — pompalı yakından geri iter, el bombası havaya uçurur,
   kafadan vuruş başı geriye atar. Gövde havada döner, duvara çarpıp sekebilir, halıya yığılır ve bir süre orada kalır.
@@ -136,8 +139,8 @@ Eklentiler silahta kalır: silah yere düşerse (ölünce ya da değiştirince) 
 
 ## Ayarlar
 
-Oyun (isim, fare ve nişan/dürbün hassasiyeti, Y ekseni, nişan/çömelme basılı tut ↔ aç/kapat, nişangah, vuruş
-işaretleri), Görüntü (kalite, FOV, **bodycam lens efekti yoğunluğu** — baş dönmesi yaşayanlar için, kamera sarsıntısı,
+Oyun (isim, fare ve nişan/dürbün hassasiyeti, ham fare girişi, Y ekseni, nişan/çömelme basılı tut ↔ aç/kapat,
+nişangah: isabete göre açılan artı / nokta / kapalı ve rengi, vuruş işaretleri), Görüntü (kalite, FOV, **bodycam lens efekti yoğunluğu** — baş dönmesi yaşayanlar için, kamera sarsıntısı,
 hareket bulanıklığı, parlaklık, FPS göstergesi), Ses (ana, efekt, ortam, arayüz, HRTF). Tarayıcıda saklanır.
 
 ## Teknik
