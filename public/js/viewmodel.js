@@ -26,17 +26,20 @@ function kf(u, keys) {
   return keys[keys.length - 1][1];
 }
 
-// hip pose, ADS eye distance to the sight point (generous eye relief keeps the gun low and the target visible), muzzle flash size
+// hip pose, ADS eye distance to the sight point (generous eye relief keeps the gun low and the target visible),
+// iron-sight hold (deg): the aligned sights sit this far under the aim point, so the target stands on top of the
+// front post instead of behind it ("6 o'clock hold"; red dot / scope: none), muzzle flash size
 const POSE = {
-  pistol: { hip: [0.09, -0.165, -0.41], D: 0.6, flash: 0.14 },
-  revolver: { hip: [0.09, -0.16, -0.41], D: 0.62, flash: 0.18 },
-  smg: { hip: [0.08, -0.225, -0.44], D: 0.82, flash: 0.18 },
-  shotgun: { hip: [0.08, -0.23, -0.5], D: 1.3, flash: 0.3 },
-  rifle: { hip: [0.08, -0.23, -0.5], D: 1.1, flash: 0.24 },
-  m4: { hip: [0.08, -0.225, -0.47], D: 0.36, flash: 0.2 },
-  sniper: { hip: [0.08, -0.24, -0.5], D: 0.34, flash: 0.28 },
-  knife: { hip: [0.11, -0.165, -0.3], D: 0.4, flash: 0 },
+  pistol: { hip: [0.09, -0.165, -0.41], D: 0.6, hold: 1.0, flash: 0.14 },
+  revolver: { hip: [0.09, -0.16, -0.41], D: 0.62, hold: 1.0, flash: 0.18 },
+  smg: { hip: [0.08, -0.225, -0.44], D: 0.82, hold: 0.9, flash: 0.18 },
+  shotgun: { hip: [0.08, -0.23, -0.5], D: 1.3, hold: 0.7, flash: 0.3 },
+  rifle: { hip: [0.08, -0.23, -0.5], D: 1.1, hold: 1.0, flash: 0.24 },
+  m4: { hip: [0.08, -0.225, -0.47], D: 0.36, hold: 0, flash: 0.2 },
+  sniper: { hip: [0.08, -0.24, -0.5], D: 0.34, hold: 0, flash: 0.28 },
+  knife: { hip: [0.11, -0.165, -0.3], D: 0.4, hold: 0, flash: 0 },
 };
+const X_AXIS = new THREE.Vector3(1, 0, 0);
 // recoil feel: spring impulses (back/up m/s, pitch/yaw/roll rad/s), spring stiffness/damping, camera shake, fov punch
 export const FEEL = {
   pistol: { back: 0.9, up: 0.12, pitch: 5.5, yaw: 0.8, roll: 1.2, k: 320, c: 22, cam: 0.08, fov: 0.5 },
@@ -185,8 +188,10 @@ export class Viewmodel {
     for (const t of WEAPON_ORDER) {
       const g = buildGun(t, M);
       g.visible = false;
-      const s = g.userData.sight, D = POSE[t].D;
-      g.userData.ads = [-s.x, -s.y, -D - s.z];
+      const s = g.userData.sight, D = POSE[t].D, h = -THREE.MathUtils.degToRad(POSE[t].hold);
+      // the whole gun is pitched down about the eye by the hold angle: sights stay aligned with the eye
+      g.userData.ads = new THREE.Vector3(-s.x, -s.y, -D - s.z).applyAxisAngle(X_AXIS, h).toArray();
+      g.userData.adsPitch = h;
       this.root.add(g);
       this.guns[t] = g;
     }
@@ -280,7 +285,7 @@ export class Viewmodel {
       lerp(P.hip[2], ap[2], a) + 0.03 * sk + st.inertZ * inert + pp[2] + this.sp.x.z + 0.1 * bk,
     );
     g.rotation.set(
-      this.sr.x.x * (1 - a * 0.3) - 0.42 * sk + st.swayY * 2 * sway + pr[0] + 0.3 * bk - 0.5 * dk,
+      this.sr.x.x * (1 - a * 0.3) - 0.42 * sk + st.swayY * 2 * sway + pr[0] + 0.3 * bk - 0.5 * dk + (d.adsPitch || 0) * a,
       st.swayX * 2.5 * sway + 0.62 * sk + (1 - a) * 0.03 + pr[1] + this.sr.x.y + 0.2 * bk,
       -st.swayX * 3 * sway + 0.18 * sk + 0.05 * st.crouchK * (1 - a) - st.inertX * 2 * inert + pr[2] + this.sr.x.z - st.lean * 0.12,
     );

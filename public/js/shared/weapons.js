@@ -11,33 +11,33 @@ export const WEAPONS = {
   pistol: {
     label: 'G17 TABANCA', short: 'G17', slot: 'secondary', cls: 'pistol', dmg: 25, head: 2.3, rpm: 450, modes: ['semi'], mag: 17, reserve: 51, maxReserve: 119,
     reload: 1.45, reloadEmpty: 1.75, spread: 0.016, adsSpread: 0.004, moveSpread: 0.02, recoil: 0.03, hRecoil: 0.008, pellets: 1,
-    range: 70, fs: 12, fe: 40, minMul: 0.6, moveMul: 1.0, chamber: true, draw: 0.32, adsFov: 0.86,
+    range: 70, fs: 12, fe: 40, minMul: 0.6, moveMul: 1.0, chamber: true, draw: 0.32, adsFov: 0.8,
   },
   revolver: {
     label: '.357 TOPLU TABANCA', short: '.357', slot: 'secondary', cls: 'revolver', dmg: 52, head: 2.1, rpm: 150, modes: ['semi'], mag: 6, reserve: 18, maxReserve: 42,
     reload: 2.6, reloadEmpty: 2.6, spread: 0.02, adsSpread: 0.003, moveSpread: 0.03, recoil: 0.075, hRecoil: 0.016, pellets: 1,
-    range: 75, fs: 15, fe: 45, minMul: 0.7, moveMul: 1.0, chamber: false, draw: 0.4, adsFov: 0.84,
+    range: 75, fs: 15, fe: 45, minMul: 0.7, moveMul: 1.0, chamber: false, draw: 0.4, adsFov: 0.78,
   },
   smg: {
     label: 'MP5 HAFİF MAKİNELİ', short: 'MP5', slot: 'primary', cls: 'smg', dmg: 20, head: 2.0, rpm: 800, modes: ['auto', 'semi'], mag: 30, reserve: 90, maxReserve: 210,
     reload: 2.0, reloadEmpty: 2.45, spread: 0.028, adsSpread: 0.009, moveSpread: 0.016, recoil: 0.016, hRecoil: 0.009, pellets: 1,
-    range: 60, fs: 10, fe: 30, minMul: 0.55, moveMul: 0.97, chamber: true, draw: 0.45, adsFov: 0.82,
+    range: 60, fs: 10, fe: 30, minMul: 0.55, moveMul: 0.97, chamber: true, draw: 0.45, adsFov: 0.74,
   },
   shotgun: {
     label: 'M870 POMPALI', short: 'M870', slot: 'primary', cls: 'shotgun', dmg: 12, head: 1.6, rpm: 70, modes: ['pump'], mag: 6, reserve: 18, maxReserve: 42,
     reload: 0, reloadEmpty: 0, shell: { start: 0.42, per: 0.52, end: 0.34 }, cycle: 0.62,
     spread: 0.068, adsSpread: 0.052, moveSpread: 0.015, recoil: 0.085, hRecoil: 0.02, pellets: 9,
-    range: 35, fs: 7, fe: 20, minMul: 0.2, moveMul: 0.93, chamber: false, draw: 0.55, adsFov: 0.86,
+    range: 35, fs: 7, fe: 20, minMul: 0.2, moveMul: 0.93, chamber: false, draw: 0.55, adsFov: 0.8,
   },
   rifle: {
     label: 'AK-47 PİYADE TÜFEĞİ', short: 'AK-47', slot: 'primary', cls: 'rifle', dmg: 34, head: 2.4, rpm: 600, modes: ['auto', 'semi'], mag: 30, reserve: 60, maxReserve: 180,
     reload: 2.5, reloadEmpty: 2.95, spread: 0.03, adsSpread: 0.005, moveSpread: 0.035, recoil: 0.034, hRecoil: 0.017, pellets: 1,
-    range: 95, fs: 18, fe: 55, minMul: 0.62, moveMul: 0.92, chamber: true, draw: 0.55, adsFov: 0.8,
+    range: 95, fs: 18, fe: 55, minMul: 0.62, moveMul: 0.92, chamber: true, draw: 0.55, adsFov: 0.72,
   },
   m4: {
     label: 'M4A1 KARABİNA', short: 'M4A1', slot: 'primary', cls: 'm4', dmg: 27, head: 2.3, rpm: 780, modes: ['auto', 'burst', 'semi'], mag: 30, reserve: 60, maxReserve: 180,
     reload: 2.3, reloadEmpty: 2.7, spread: 0.027, adsSpread: 0.0035, moveSpread: 0.03, recoil: 0.022, hRecoil: 0.01, pellets: 1,
-    range: 90, fs: 20, fe: 60, minMul: 0.65, moveMul: 0.94, chamber: true, draw: 0.5, adsFov: 0.74,
+    range: 90, fs: 20, fe: 60, minMul: 0.65, moveMul: 0.94, chamber: true, draw: 0.5, adsFov: 0.64,
   },
   sniper: {
     label: 'R700 KESKİN NİŞANCI', short: 'R700', slot: 'primary', cls: 'bolt', dmg: 105, head: 2.5, rpm: 60, modes: ['bolt'], mag: 5, reserve: 10, maxReserve: 25,

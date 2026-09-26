@@ -493,13 +493,12 @@ class Game {
     if (aim && !this.padAim) { this.fresh.r = true; me.adsToggle = !me.adsToggle; }
     this.padFire = fire; this.padAim = aim;
     if (P.pressed(BTN.A)) this.padJump = true;
-    if (P.pressed(BTN.B)) me.padCrouch = !me.padCrouch;
+    if (P.pressed(BTN.B) && !this.shop) me.padCrouch = !me.padCrouch;
     if (P.pressed(BTN.L3)) me.padSprint = !me.padSprint;
     this.padLean = (P.down[BTN.RIGHT] ? 1 : 0) - (P.down[BTN.LEFT] ? 1 : 0);
     if (!me.alive) return;
     if (this.shop) {
       this.padJump = false;
-      if (P.pressed(BTN.B)) me.padCrouch = !me.padCrouch;
       if (P.pressed(BTN.UP)) this.shopMove(-1);
       if (P.pressed(BTN.DOWN)) this.shopMove(1);
       if (P.pressed(BTN.A)) this.buySelected();

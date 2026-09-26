@@ -212,7 +212,7 @@ table.keys .alt { font-size: 11px; opacity: 0.55; margin-left: 4px; }
 @keyframes payfade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
 #prompt .att { color: #9fd0ff; font-size: 12px; margin-left: 6px; }
 #prompt .cashc { color: #b8e08a; margin-left: 6px; }
-#shop { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(520px, 92vw); background: var(--panel); border: 1px solid rgba(255, 230, 150, 0.35); padding: 14px 16px 10px; font-size: 13px; }
+#shop { position: absolute; right: 4vw; top: 47%; transform: translateY(-50%); width: min(460px, 60vw); background: var(--panel); border: 1px solid rgba(255, 230, 150, 0.35); padding: 14px 16px 10px; font-size: 13px; }
 #shop h3 { margin: 0 0 2px; font-size: 16px; letter-spacing: 0.18em; color: #efe2b4; display: flex; justify-content: space-between; }
 #shop h3 span { color: #b8e08a; letter-spacing: 0.04em; }
 #shop .sub { color: var(--dim); font-size: 11px; margin-bottom: 8px; }
@@ -227,3 +227,4 @@ table.keys .alt { font-size: 11px; opacity: 0.55; margin-left: 4px; }
 #shop .why { color: #ff8a7a; font-size: 10px; margin-left: 6px; }
 #shop .keys { margin-top: 8px; color: var(--dim); font-size: 11px; text-align: center; }
 #shop .keys b { color: var(--acc); }
+@media (max-width: 760px) { #shop { right: 50%; transform: translate(50%, -50%); width: 92vw; } }
