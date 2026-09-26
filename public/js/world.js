@@ -1,7 +1,8 @@
 // Builds the Backrooms Level 0 geometry with baked fluorescent lighting.
 import * as THREE from 'three';
-import { CELL, CEIL, DOOR_H, CRATE_W, CRATE_D, CRATE_H, VENDOR_W, VENDOR_D, VENDOR_H, raycast, mulberry32 } from './shared/map.js';
+import { CELL, CEIL, DOOR_H, VENDOR_W, VENDOR_D, VENDOR_H, raycast, mulberry32 } from './shared/map.js';
 import * as TX from './textures.js';
+import { chestGeometries, chestLabelTexture, CHEST_HINGE_Y, CHEST_HINGE_Z } from './chest.js';
 
 const K_DIRECT = 7.5;
 const LIGHT_TINT = [1.0, 0.95, 0.8];
@@ -269,38 +270,41 @@ export function buildWorld(map, scene, renderer, onProgress = () => {}) {
   });
   group.add(housing, panel);
 
-  // ---------- loot crates ----------
-  const crateTex = TX.crateTexture();
-  crateTex.anisotropy = aniso;
-  const bodyGeo = new THREE.BoxGeometry(CRATE_W, CRATE_H, CRATE_D);
-  bodyGeo.translate(0, CRATE_H / 2, 0);
-  { const ix = Array.from(bodyGeo.index.array); ix.splice(12, 6); bodyGeo.setIndex(ix); } // open top
-  // the bottom face (vertices 12..15) doubles as the inner floor: lifted off the carpet so the two never z-fight
-  { const p = bodyGeo.attributes.position; for (let k = 12; k < 16; k++) p.setY(k, 0.04); }
-  const lidGeo = new THREE.BoxGeometry(CRATE_W + 0.02, 0.035, CRATE_D + 0.02);
-  lidGeo.translate(0, 0.0175, (CRATE_D + 0.02) / 2);
+  // ---------- loot crates: M.E.G. supply chests ----------
+  const CG = chestGeometries(), labelTex = chestLabelTexture();
   const nC = map.crates.length;
   const cBake = new Float32Array(nC);
   map.crates.forEach((c, i) => { cBake[i] = Math.min(1.4, sampleLight(c.x, c.z) * 0.9 + 0.02); });
-  bodyGeo.setAttribute('bake', new THREE.InstancedBufferAttribute(cBake, 1));
-  lidGeo.setAttribute('bake', new THREE.InstancedBufferAttribute(cBake, 1));
-  const crateMat = bakeMaterial({ map: crateTex, side: THREE.DoubleSide }, { attr: true });
-  const lidMat = bakeMaterial({ map: crateTex }, { attr: true });
-  const crateBody = new THREE.InstancedMesh(bodyGeo, crateMat, nC);
-  const crateLid = new THREE.InstancedMesh(lidGeo, lidMat, nC);
-  const crateState = map.crates.map((c) => ({ open: 0, target: 0 }));
+  const bakeAttr = new THREE.InstancedBufferAttribute(cBake, 1);
+  const lzC = -CHEST_HINGE_Z; // lid center from the hinge
+  const lidLabelGeo = new THREE.PlaneGeometry(0.3, 0.1875).rotateX(-Math.PI / 2).translate(0, 0.0965, lzC);
+  const frontLabelGeo = new THREE.PlaneGeometry(0.16, 0.1).translate(0, 0.125, -CHEST_HINGE_Z + 0.0045);
+  for (const g of [CG.body, CG.lid, lidLabelGeo, frontLabelGeo]) g.setAttribute('bake', bakeAttr);
+  const chestMat = bakeMaterial({ vertexColors: true, color: 0xffffff }, { attr: true });
+  const labelMat = bakeMaterial({ map: labelTex, alphaTest: 0.35, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }, { attr: true });
+  const crateBody = new THREE.InstancedMesh(CG.body, chestMat, nC);
+  const crateLid = new THREE.InstancedMesh(CG.lid, chestMat, nC);
+  const lidLabel = new THREE.InstancedMesh(lidLabelGeo, labelMat, nC);
+  const frontLabel = new THREE.InstancedMesh(frontLabelGeo, labelMat, nC);
+  // status light: green while the chest is full, dim red once it has been opened
+  const led = new THREE.InstancedMesh(new THREE.SphereGeometry(0.0065, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff }), nC);
+  const LED_ON = new THREE.Color(0.35, 3.2, 0.6), LED_OFF = new THREE.Color(1.1, 0.08, 0.05);
+  const crateState = map.crates.map(() => ({ open: 0, target: 0 }));
   const q = new THREE.Quaternion(), qa = new THREE.Quaternion(), s1 = new THREE.Vector3(1, 1, 1), v = new THREE.Vector3(), X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0);
   const setCrate = (i) => {
     const c = map.crates[i];
     q.setFromAxisAngle(Y, c.rot);
-    m4.compose(v.set(c.x, 0, c.z), q, s1); crateBody.setMatrixAt(i, m4);
+    m4.compose(v.set(c.x, 0, c.z), q, s1); crateBody.setMatrixAt(i, m4); frontLabel.setMatrixAt(i, m4);
+    m4.compose(v.copy(CG.ledPos).applyQuaternion(q).add({ x: c.x, y: 0, z: c.z }), q, s1); led.setMatrixAt(i, m4);
+    led.setColorAt(i, crateState[i].target ? LED_OFF : LED_ON);
     const a = -1.95 * crateState[i].open;
     qa.setFromAxisAngle(X, a);
-    const hinge = v.set(0, CRATE_H, -(CRATE_D + 0.02) / 2).applyQuaternion(q).add({ x: c.x, y: 0, z: c.z });
-    m4.compose(hinge, q.clone().multiply(qa), s1); crateLid.setMatrixAt(i, m4);
+    const hinge = v.set(0, CHEST_HINGE_Y, CHEST_HINGE_Z).applyQuaternion(q).add({ x: c.x, y: 0, z: c.z });
+    m4.compose(hinge, q.clone().multiply(qa), s1); crateLid.setMatrixAt(i, m4); lidLabel.setMatrixAt(i, m4);
   };
   for (let i = 0; i < nC; i++) setCrate(i);
-  group.add(crateBody, crateLid);
+  const lidDirty = () => { crateLid.instanceMatrix.needsUpdate = lidLabel.instanceMatrix.needsUpdate = true; if (led.instanceColor) led.instanceColor.needsUpdate = true; };
+  group.add(crateBody, crateLid, lidLabel, frontLabel, led);
 
   // ---------- almond-water vending machines ----------
   const VT = TX.vendorTextures();
@@ -329,7 +333,11 @@ export function buildWorld(map, scene, renderer, onProgress = () => {}) {
   let flickerT = 0;
   return {
     group, sampleLight, crateState,
-    setCrateOpen(i, open, instant) { crateState[i].target = open ? 1 : 0; if (instant) { crateState[i].open = crateState[i].target; setCrate(i); crateLid.instanceMatrix.needsUpdate = true; } },
+    setCrateOpen(i, open, instant) {
+      crateState[i].target = open ? 1 : 0;
+      if (instant) crateState[i].open = crateState[i].target;
+      setCrate(i); lidDirty();
+    },
     flickers,
     update(dt, time) {
       let dirty = false;
@@ -342,7 +350,7 @@ export function buildWorld(map, scene, renderer, onProgress = () => {}) {
           setCrate(i); dirty = true;
         }
       }
-      if (dirty) crateLid.instanceMatrix.needsUpdate = true;
+      if (dirty) lidDirty();
       flickerT += dt;
       if (flickerT > 0.03) {
         flickerT = 0;

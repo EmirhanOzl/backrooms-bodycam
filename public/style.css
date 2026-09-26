@@ -22,18 +22,34 @@ kbd { font-family: inherit; font-size: 0.92em; color: var(--acc); border: 1px so
 #feed .w { opacity: 0.8; }
 #feed .hs { color: #ff6b5a; opacity: 1; }
 @keyframes fadeout { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
-/* crosshair: four ticks that open with the weapon's current spread (--gap, px) + a center dot */
-#xhair { position: absolute; left: 50%; top: 50%; width: 0; height: 0; --gap: 6px; --xc: #fff; transition: opacity 0.12s; }
-#xhair i, #xhair b { position: absolute; background: var(--xc); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7); }
-#xhair b { width: 3px; height: 3px; left: -1.5px; top: -1.5px; border-radius: 50%; }
-#xhair i { width: 2px; height: 8px; left: -1px; top: -4px; }
-#xhair i:nth-child(1) { transform: translateY(calc(-1 * var(--gap) - 4px)); }
-#xhair i:nth-child(2) { transform: translateY(calc(var(--gap) + 4px)); }
-#xhair i:nth-child(3) { transform: rotate(90deg) translateY(calc(-1 * var(--gap) - 4px)); }
-#xhair i:nth-child(4) { transform: rotate(90deg) translateY(calc(var(--gap) + 4px)); }
+/* crosshair (HUD + settings preview): four lines around a center dot, all driven by CSS variables */
+.xh { position: absolute; left: 50%; top: 50%; width: 0; height: 0; --xc: #fff; --len: 6px; --th: 2px; --thh: -1px; --gap: 4px; --dot: 2px; --doth: -1px; --la: 1; --da: 1; --ol: 1px; --ola: 0.65; }
+.xh i, .xh b { position: absolute; background: var(--xc); box-shadow: 0 0 0 var(--ol) rgba(0, 0, 0, var(--ola)); }
+.xh b { width: var(--dot); height: var(--dot); left: var(--doth); top: var(--doth); opacity: var(--da); }
+.xh i { width: var(--th); height: var(--len); left: var(--thh); top: calc(var(--len) / -2); opacity: var(--la); }
+.xh i:nth-child(1) { transform: translateY(calc(-1 * var(--gap) - var(--len) / 2)); }
+.xh i:nth-child(2) { transform: translateY(calc(var(--gap) + var(--len) / 2)); }
+.xh i:nth-child(3) { transform: rotate(90deg) translateY(calc(-1 * var(--gap) - var(--len) / 2)); }
+.xh i:nth-child(4) { transform: rotate(90deg) translateY(calc(var(--gap) + var(--len) / 2)); }
+.xh.tstyle i:nth-child(1) { display: none; }
+#xhair { transition: opacity 0.12s; }
 #xhair.dot i, #xhair.ads i { display: none; }
-#xhair.ads b { opacity: 0.55; }
+#xhair.ads b { opacity: 0.55; width: 3px; height: 3px; left: -1px; top: -1px; }
 #xhair.sprint { opacity: 0.25; }
+/* crosshair editor */
+.xhprev { position: sticky; top: 0; z-index: 1; height: 120px; margin: 4px 0 8px; border: 1px solid rgba(255, 255, 255, 0.2); overflow: hidden; }
+.xhprev.wall { background: repeating-linear-gradient(90deg, #cbbd6c 0 18px, #c4b564 18px 36px); }
+.xhprev.dark { background: radial-gradient(ellipse at center, #2c291e, #0d0c09); }
+.xhprev.carpet { background: radial-gradient(ellipse at 40% 40%, #9d8a54, #6f613a); }
+.xhprev .bgs { position: absolute; right: 6px; bottom: 6px; display: flex; gap: 4px; }
+.xhprev .bgs button { font-size: 9px; padding: 2px 6px; background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 255, 255, 0.25); color: #ddd; cursor: pointer; }
+.xhpresets { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.xhpresets button { font-size: 10px; padding: 4px 8px; }
+.row.sub .lab { padding-left: 14px; opacity: 0.8; }
+.swatches { display: flex; gap: 5px; align-items: center; }
+.swatches button { width: 20px; height: 20px; border: 2px solid rgba(0, 0, 0, 0.6); cursor: pointer; padding: 0; }
+.swatches button.on { outline: 2px solid var(--acc); }
+.swatches input[type=color] { width: 28px; height: 22px; padding: 0; border: 1px solid rgba(255, 255, 255, 0.3); background: none; cursor: pointer; }
 
 #hitmark { position: absolute; left: 50%; top: 50%; width: 0; height: 0; opacity: 0; }
 #hitmark i { position: absolute; width: 2px; height: 9px; background: #fff; box-shadow: 0 0 2px #000; left: -1px; top: -4.5px; }

@@ -34,13 +34,13 @@ const LOCAL_LAT = 0.02;   // constant latency on our own gunshots keeps full-aut
 const STREAKS = { 2: 'ÇİFTE LEŞ', 3: 'ÜÇLÜ LEŞ', 5: 'DURDURULAMAZ', 7: 'EFSANEVİ', 10: 'SEVİYE 0\'IN KABUSU' };
 const SLOT_ACTIONS = { slot1: 'primary', slot2: 'secondary', slot3: 'melee' };
 const SLOT_ORDER = ['primary', 'secondary', 'melee'];
-const XH_COLORS = { white: '#ffffff', green: '#6dff7a', cyan: '#5ef2ff', red: '#ff4b4b', yellow: '#ffe14d' };
 const SHELL_KIND = { pistol: 'pistol', smg: 'pistol', rifle: 'rifle', m4: 'rifle', sniper: 'rifle', shotgun: 'hull' };
 
 function mkSlot(w, mag, res, a = 0) {
   const W = WEAPONS[w];
   return { w, a, mag: mag ?? (W.melee ? 0 : magSize(w, a)), res: res ?? W.reserve ?? 0, mode: W.modes[0], needsCycle: false };
 }
+const isInspect = (an) => an === 'inspect' || an === 'kn_inspect';
 const slotMag = (s) => (WEAPONS[s.w].melee ? 1 : magSize(s.w, s.a));
 // how an item lies on the carpet: height of its origin and tilt
 const ITEM_REST = { weapon: [0.03, 0, Math.PI / 2], nade: [0, 0, 0], ammo: [0, 0, 0], med: [0, 0, 0], water: [0, 0, 0], armor: [0, 0, 0], cash: [0, 0, 0] };
@@ -103,6 +103,7 @@ class Game {
     this.lasers = new Lasers(this.scene, 8);
     this.sound = new Sound();
     this.hud = new Hud();
+    this.hud.applyCrosshair(settings.xh);
     this.M = gunMaterials();
     this.vm = new Viewmodel(this.vmScene, this.M);
     this.vm.onEvent = (e, a) => this.onVmEvent(e, a);
@@ -375,6 +376,7 @@ class Game {
   }
   onSetting(k) {
     if (k === 'quality') this.applyQuality();
+    if (k === 'xh') this.hud.applyCrosshair(settings.xh);
     if (['master', 'sfx', 'amb', 'ui', 'hrtf'].includes(k)) this.applyAudioSettings();
   }
 
@@ -576,7 +578,7 @@ class Game {
   }
   canAct() {
     const an = this.vm.animName;
-    return this.me.alive && (!an || an === 'inspect');
+    return this.me.alive && (!an || isInspect(an));
   }
   startReload() {
     const me = this.me, s = this.cur(), w = WEAPONS[s.w];
@@ -601,14 +603,17 @@ class Game {
     this.sound.mech('mode', 0.5);
     this.hud.toast(`ATIŞ MODU: ${{ auto: 'OTOMATİK', burst: '3\'LÜ', semi: 'TEK' }[s.mode]}`);
   }
-  inspect() { if (this.canAct() && !this.vm.animName && this.me.ads < 0.2) this.vm.play('inspect', 2.3); }
+  inspect() {
+    if (!this.canAct() || this.vm.animName || this.me.ads > 0.2) return;
+    if (this.vm.cls === 'knife') this.vm.play('kn_inspect', 2.8); else this.vm.play('inspect', 2.3);
+  }
 
   nadePress() {
     const me = this.me;
     me.nadeHeld = true;
     if (me.inv.nades <= 0 || !me.alive) { if (me.inv.nades <= 0) this.hud.toast('EL BOMBASI YOK', 'bad'); return; }
     const an = this.vm.animName;
-    if (an && an !== 'inspect' && an !== 'reload' && an !== 'sg_start' && an !== 'sg_insert' && an !== 'revolver') return;
+    if (an && !isInspect(an) && an !== 'reload' && an !== 'sg_start' && an !== 'sg_insert' && an !== 'revolver') return;
     me.reloading = false; me.burst = 0; me.cooking = false; me.cookT = 0;
     this.vm.play('nade_pull', 0.36);
   }
@@ -936,7 +941,7 @@ class Game {
         const A = ATTACHMENTS.filter((x) => m.a & x.bit).map((x) => x.label);
         this.hud.toast(`${WEAPONS[m.w].short}: ${A.join(' · ')}`, 'kill');
         this.sound.mech('att_on', 0.6);
-        if (!this.vm.animName && me.ads < 0.2) this.vm.play('inspect', 2.3);
+        if (!this.vm.animName && me.ads < 0.2) this.inspect();
         this.renderShop();
         return;
       }
@@ -1614,7 +1619,7 @@ class Game {
     const scoped = (this.scopeK || 0) > 0.6;
     me.holdBreath = scoped && shift && me.breath > 0;
     if (me.holdBreath) me.breath = Math.max(0, me.breath - dt / 4.5); else me.breath = Math.min(1, me.breath + dt / (scoped ? 6 : 2.5));
-    // lean (Q/E): camera slides sideways around cover, limited by nearby walls
+    // lean: camera slides sideways around cover, limited by nearby walls
     const leanT = me.sprint ? 0 : clamp((this.down('leanR') ? 1 : 0) - (this.down('leanL') ? 1 : 0) + (this.padLean || 0), -1, 1);
     me.lean = damp(me.lean, leanT, 9, dt);
     if (Math.abs(me.lean) > 0.01) {
@@ -1760,7 +1765,7 @@ class Game {
     if (!me.alive || this.isPaused() || this.endData || this.shop) return;
     // knife
     if (w.melee) {
-      if (!an || an === 'inspect') {
+      if (!an || isInspect(an)) {
         if (this.fresh.r) this.melee(true);
         else if (this.fireHeld()) this.melee(false);
       }
@@ -1771,7 +1776,7 @@ class Game {
     const press = this.time - (me.trigQ ?? -9) < 0.18;
     // shotgun: pressing fire during a shell reload stops after the current shell
     if (me.reloading && w.shell && this.fresh.l && s.mag > 0) me.wantFire = true;
-    if (an === 'inspect' && (this.fresh.l || this.aimHeld())) this.vm.stop();
+    if (isInspect(an) && (this.fresh.l || this.aimHeld())) this.vm.stop();
     const ready = !this.vm.animName && !me.reloading && !me.cycling && !s.needsCycle && me.sprintK < 0.35;
     if (!ready) { if (this.fresh.l && !this.vm.animName && s.mag === 0 && !me.reloading) this.startReload(); return; }
     if (press && s.mode === 'burst' && me.burst <= 0) { me.burst = 3; me.trigQ = -9; }
@@ -2018,7 +2023,7 @@ class Game {
       } else if (d) {
         const label = esc(itemLabel(d));
         hud.prompt(this.useful(d) ? `<b>[${useKey}]</b> ${label} <span style="opacity:.6">· üzerinden geçerek de alınır</span>` : `${label} <span style="opacity:.6">· ${this.fullText(d).toLowerCase()}</span>`);
-      } else if (this.nearCrate >= 0) hud.prompt(`<b>[${useKey}]</b> Kutuyu aç`);
+      } else if (this.nearCrate >= 0) hud.prompt(`<b>[${useKey}]</b> Sandığı aç`);
       else if (this.nearVendor) hud.prompt(`<b>[${useKey}]</b> Badem suyu otomatı <span class="cashc">$${me.cash}</span>`);
       else hud.prompt(null);
       if (!me.alive) hud.respawn(Math.max(0, RESPAWN_T - (this.time - me.deathAt)));
@@ -2045,16 +2050,18 @@ class Game {
   }
 
   updateCrosshair() {
-    const me = this.me, s = this.cur(), w = WEAPONS[s.w], st = settings.xstyle;
+    const me = this.me, s = this.cur(), w = WEAPONS[s.w], xh = settings.xh;
     const sights = me.ads > 0.5 && !w.melee;
     // scope and red dot bring their own reticle; iron sights keep a faint dot on the aim point
-    const on = st !== 'off' && me.alive && !this.shop && !this.endData && !(sights && (w.scope || s.w === 'm4'));
+    const on = xh.show && me.alive && !this.shop && !this.endData && !(sights && (w.scope || s.w === 'm4'));
     this.hud.crosshair(on);
     if (!on) return;
+    // the lines open by how much wider than the resting cone the weapon shoots right now
     const fov = THREE.MathUtils.degToRad(this.camera.fov), zoom = Math.max(0.5, this.post.final.uniforms.uZoom.value);
-    const gap = (Math.tan(this.aimSpread(s, w)) / Math.tan(fov / 2)) * (innerHeight / 2) / zoom;
-    const mode = sights ? 'ads' : st === 'dot' || w.melee ? 'dot' : 'cross';
-    this.hud.crosshairState(mode, clamp(gap, 3, 90), XH_COLORS[settings.xcolor] || '#fff', me.sprintK > 0.5 || me.reloading);
+    const px = (a) => (Math.tan(a) / Math.tan(fov / 2)) * (innerHeight / 2) / zoom;
+    const extra = xh.dynamic && !w.melee ? clamp(px(this.aimSpread(s, w)) - px(w.spread * (me.crouch ? 0.8 : 1)), 0, 80) : 0;
+    const mode = sights ? 'ads' : !xh.lines || w.melee ? 'dot' : 'cross';
+    this.hud.crosshairState(mode, xh.gap + extra, me.sprintK > 0.5 || me.reloading);
   }
 
   renderScore() {

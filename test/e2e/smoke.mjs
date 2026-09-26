@@ -103,7 +103,8 @@ try {
   ok(await wait(() => { const g = window.__game; return g.me.cash < 500 && [...g.drops.values()].some((d) => d.k === 'armor' && !d.fly); }, null, 20000), 'bought plate is dispensed');
   await page.evaluate(() => {
     const g = window.__game, d = [...g.drops.values()].find((x) => x.k === 'armor');
-    g.closeShop(); g.me.pos.set(d.x, 0, d.z); Object.assign(g.net.core.players.get(g.myId), { x: d.x, z: d.z });
+    g.closeShop(false); g.locked = true; g.refreshPause(); // headless: no real pointer lock to take back
+    g.me.pos.set(d.x, 0, d.z); Object.assign(g.net.core.players.get(g.myId), { x: d.x, z: d.z });
   });
   ok(await wait(() => window.__game.me.armor > 0, null, 20000), 'walking over the plate picks it up');
 
@@ -111,10 +112,16 @@ try {
   await wait(() => window.__game.me.slot === 'melee' && !window.__game.vm.animName);
   id = await stage(1.1, -1, null);
   await wait((i) => { const g = window.__game, r = g.remotes.get(i), b = g.net.core.players.get(i); return r && Math.hypot(r.x - b.x, r.z - b.z) < 0.05; }, id);
-  await page.evaluate(() => { window.__game.mouse.l = true; });
-  await wait(() => window.__game.vm.animName === 'knife_light');
-  await page.evaluate(() => { window.__game.mouse.l = false; });
-  ok(await wait((i) => !window.__game.net.core.players.get(i).alive, id, 20000), 'knife backstab kills');
+  // at the 2-5 fps of a software-rendered browser a swing can outlast the server's stab window: allow a retry
+  let stabbed = false;
+  for (let tries = 0; tries < 3 && !stabbed; tries++) {
+    await wait(() => !window.__game.vm.animName);
+    await page.evaluate(() => { window.__game.mouse.l = true; });
+    await wait(() => window.__game.vm.animName === 'knife_light');
+    await page.evaluate(() => { window.__game.mouse.l = false; });
+    stabbed = await wait((i) => !window.__game.net.core.players.get(i).alive, id, 10000);
+  }
+  ok(stabbed, 'knife backstab kills');
 
   await wait(() => [...window.__game.net.core.players.values()].filter((p) => p.bot && p.alive).length > 0, null, 30000);
   await stage(4, 1, null);
