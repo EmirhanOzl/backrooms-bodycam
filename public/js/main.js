@@ -295,7 +295,7 @@ class Game {
     this.loading(false);
     this.sound.setHum?.(0.9);
     $('pause').classList.remove('hidden'); // hidden again once the pointer lock is granted
-    this.padPaused = false;
+    this.padPaused = false; this.clickToResume = false;
     this.refreshPause(true);                 // offline: the match starts when the pointer lock is granted (or a gamepad is used)
     this.lock();
     this.sendT = 0; this.pingT = 0;
@@ -395,7 +395,7 @@ class Game {
     this.particles.uniforms.uScale.value = this.fire.uniforms.uScale.value = this.motes.uniforms.uScale.value = s;
   }
 
-  lock() {
+  lock(onFail = () => this.refreshPause(true)) {
     if (this.state !== 'game' || this.locked) return;
     // newer Chrome returns a Promise that rejects during the post-ESC cooldown; older API returns void.
     // Raw (unaccelerated) input also avoids the occasional huge jump some mice report through the OS path.
@@ -403,7 +403,7 @@ class Game {
     const req = (opts) => { try { return Promise.resolve(opts ? c.requestPointerLock?.(opts) : c.requestPointerLock?.()); } catch (e) { return Promise.reject(e); } };
     req(settings.rawInput ? { unadjustedMovement: true } : null)
       .catch((e) => (e && e.name === 'NotSupportedError' ? req(null) : Promise.reject(e)))
-      .catch(() => this.refreshPause(true));
+      .catch(() => onFail());
   }
 
   // ------------------------------------------------------------------ input
@@ -418,6 +418,7 @@ class Game {
         if (!this.shopUnlock) this.pad.active = false;
       }
       this.shopUnlock = false;
+      if (this.locked) this.clickToResume = false;
       if (this.locked && this.shop) this.closeShop(false); // clicked back into the game
       this.refreshPause(true);
     });
@@ -464,6 +465,7 @@ class Game {
       if (act === 'score' || e.code === 'Tab') e.preventDefault();
       if (act === 'score') { this.scoreOpen = true; this.renderScore(); return; }
       if (this.shop) { if (!e.repeat && this.shopKey(e.code, act)) e.preventDefault(); return; }
+      if (!this.locked && this.clickToResume && e.code === 'Escape') { this.clickToResume = false; this.refreshPause(true); return; }
       if (!this.locked) return;
       if (e.code === 'Space' || e.code.startsWith('Arrow') || e.ctrlKey || e.altKey) e.preventDefault();
       if (e.repeat) return;
@@ -494,11 +496,12 @@ class Game {
   }
   down(a) { if (this.keys[settings.binds[a]]) return true; const alt = ALT_KEYS[a]; return !!alt && alt.some((c) => this.keys[c]); }
   // paused = no mouse lock and no gamepad in use, or paused from the gamepad's Menu button
-  isPaused() { return this.state === 'game' && (this.padPaused || (!this.locked && !this.pad.active && !this.shop)); }
+  isPaused() { return this.state === 'game' && (this.padPaused || (!this.locked && !this.pad.active && !this.shop && !this.clickToResume)); }
   refreshPause(reset) {
     const paused = this.isPaused();
     const el = $('pause'), was = !el.classList.contains('hidden');
     el.classList.toggle('hidden', !paused);
+    $('resume').classList.toggle('hidden', !(this.clickToResume && !this.locked && this.state === 'game'));
     if (paused && (!was || reset)) this.showPauseMain();
     if (paused) this.closeShop();
     this.net?.setPaused(paused);
@@ -679,6 +682,14 @@ class Game {
     if (relock && !this.locked && !this.pad.active && this.state === 'game') this.lock(); // refreshes on pointerlockchange / error
     else this.refreshPause();
   }
+  // Esc cannot re-capture the mouse by itself (browsers only allow that from a click or a normal key), so the
+  // match simply goes on with a small "click to continue" note instead of the pause menu.
+  closeShopToGame() {
+    if (!this.shop) return;
+    this.clickToResume = !this.pad.active && this.state === 'game';
+    this.closeShop(false);
+    if (this.clickToResume) this.lock(() => this.refreshPause());
+  }
   shopMove(dir) {
     if (!this.shop) return;
     this.shop.sel = (this.shop.sel + dir + SHOP.length) % SHOP.length;
@@ -691,7 +702,8 @@ class Game {
     if (code === 'Enter' || code === 'NumpadEnter') { this.buyIndex(this.shop.sel); return true; }
     const n = /^(Digit|Numpad)(\d)$/.exec(code);
     if (n) { const i = (+n[2] + 9) % 10; if (i < SHOP.length) this.buyIndex(i); return true; }
-    if (act === 'use' || code === 'Escape' || code === 'Backspace') { this.closeShop(); return true; }
+    if (code === 'Escape') { this.closeShopToGame(); return true; }
+    if (act === 'use' || code === 'Backspace') { this.closeShop(); return true; }
     return false;
   }
   // why an item can't be bought right now ('' = it can)
@@ -998,7 +1010,7 @@ class Game {
 
   onHurt(m) {
     const me = this.me;
-    me.hp = m.hp; me.armor = m.armor;
+    me.hp = m.hp; me.armor = m.armor; me.hurtAt = this.time;
     const head = m.zone === 'h';
     me.hurt = Math.min(1, me.hurt + m.dmg / (head ? 22 : 35));
     me.trauma = Math.min(1, me.trauma + 0.25 + m.dmg / 120 + (head ? 0.3 : 0));
@@ -2042,11 +2054,14 @@ class Game {
       me.beatT -= dt;
       if (me.beatT <= 0) { me.beatT = 0.85; this.sound.ui('heart', 0.6); }
     }
-    const tired = Math.min(me.stamina, me.alive && me.hp < 25 ? 0.2 : 1);
-    if (me.alive && tired < 0.4) {
+    // heavy breathing: while out of stamina, or for a few seconds after a bad hit (not endlessly while hurt)
+    const winded = me.stamina < 0.4 ? 1 - me.stamina / 0.4 : 0;
+    const shaken = me.hp < 25 && this.time - (me.hurtAt ?? -99) < 6 ? 0.6 : 0;
+    const need = me.alive && !this.isPaused() ? Math.max(winded, shaken) : 0;
+    if (need > 0) {
       me.breathT -= dt;
-      if (me.breathT <= 0) { me.breathT = 0.8 + tired * 1.6; this.sound.ui('breath', 0.3 * (1 - tired)); }
-    }
+      if (me.breathT <= 0) { me.breathT = 1.8 - need * 0.8; this.sound.ui('breath', 0.12 + 0.2 * need); }
+    } else me.breathT = 0.3;
   }
 
   updateCrosshair() {

@@ -266,3 +266,4 @@ table.keys .alt { font-size: 11px; opacity: 0.55; margin-left: 4px; }
 @keyframes got { 0% { background: rgba(184, 224, 138, 0.45); } 100% { background: rgba(255, 255, 255, 0.04); } }
 #shop .keys { margin-top: 10px; color: var(--dim); font-size: 11px; text-align: center; }
 #shop .keys b { color: var(--acc); }
+#resume { position: absolute; left: 50%; top: 56%; transform: translateX(-50%); font-size: 14px; letter-spacing: 0.2em; color: var(--acc); background: rgba(0, 0, 0, 0.55); padding: 6px 14px; border: 1px solid rgba(232, 197, 71, 0.5); pointer-events: none; animation: blink 1.2s steps(2) infinite; }
