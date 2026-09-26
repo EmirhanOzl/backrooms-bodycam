@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test \"test/*.test.js\"",
-    "desktop": "npm --prefix desktop install && npm --prefix desktop start"
+    "desktop": "npm --prefix desktop install && npm --prefix desktop start",
+    "e2e": "node test/e2e/smoke.mjs"
   },
   "keywords": [],
   "author": "",
@@ -14,5 +15,8 @@
   "dependencies": {
     "three": "^0.186.1",
     "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
   }
 }

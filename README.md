@@ -11,6 +11,7 @@ npm install
 npm start          # http://localhost:3000
 npm test           # oyun çekirdeği + sunucu testleri (botlarla tam maç simülasyonu dahil)
 npm run desktop    # masaüstü (Electron) sürümü
+npm run e2e        # gerçek tarayıcıda uçtan uca duman testi (bir kez: npx playwright install chromium)
 ```
 
 - **Çevrimdışı (botlara karşı):** Menüden mod (herkes herkese / takım çatışması), ışıklandırma (normal / loş / karartma),
