@@ -382,6 +382,57 @@ export function buildGrenade(M) {
   return g;
 }
 
+// ---------- attachments (bit flags: 1 suppressor, 2 extended magazine, 4 laser) ----------
+// sup: [length, radius] on the muzzle · las: module position under the barrel (profile space) · ext: magazine stretch
+const ATT_FIT = {
+  pistol: { sup: [0.12, 0.0128], las: [0.098, -0.029, 0], ext: 1.55 },
+  revolver: { las: [0.15, -0.017, 0] },
+  smg: { sup: [0.17, 0.0185], las: [0.29, -0.047, 0], ext: 1.3 },
+  shotgun: { las: [0.66, -0.003, 0], ext: 'tube' },
+  rifle: { sup: [0.19, 0.02], las: [0.43, -0.021, 0], ext: 1.32 },
+  m4: { sup: [0.18, 0.019], las: [0.42, -0.025, 0], ext: 1.3 },
+  sniper: { sup: [0.2, 0.021], las: [0.42, -0.036, 0], ext: 1.9 },
+};
+// (re)apply attachments to a built gun; updates userData.muzzle / laser / suppressed
+export function decorateGun(g, type, a, M) {
+  const d = g.userData, p = g.children[0];
+  if (d.attGroup) { p.remove(d.attGroup); d.attGroup = null; }
+  if (!d.baseMuzzle) d.baseMuzzle = d.muzzle.clone(); else d.muzzle.copy(d.baseMuzzle);
+  if (d.mag) d.mag.scale.set(1, 1, 1);
+  d.att = a | 0; d.laser = null; d.suppressed = false;
+  const F = ATT_FIT[type];
+  if (!F || !a) return g;
+  const G = grp(p); d.attGroup = G;
+  const mx = -d.baseMuzzle.z, my = d.baseMuzzle.y;
+  if (a & 1 && F.sup) {
+    const [L, r] = F.sup;
+    cylX(G, r, mx - 0.012, mx + L, my, M.metal, 0, 20);
+    cylX(G, r * 1.05, mx - 0.012, mx + 0.006, my, M.metal2, 0, 20);
+    cylX(G, r * 1.03, mx + L - 0.014, mx + L, my, M.metal2, 0, 20);
+    for (let i = 1; i < 4; i++) cylX(G, r * 1.012, mx + (L * i) / 4 - 0.002, mx + (L * i) / 4 + 0.002, my, M.metal2, 0, 20);
+    cylX(G, r * 0.32, mx + L, mx + L + 0.0012, my, M.dark, 0, 12);
+    d.muzzle.copy(P2L(mx + L + 0.004, my));
+    d.suppressed = true;
+  }
+  if (a & 2 && F.ext) {
+    if (F.ext === 'tube') {
+      cylX(G, 0.013, 0.625, 0.69, 0.024, M.metal2, 0, 14);
+      cylX(G, 0.0145, 0.674, 0.69, 0.024, M.metal, 0, 14);
+      box(G, 0.016, 0.05, 0.03, 0.682, 0.042, 0, M.metal);
+    } else if (d.mag) d.mag.scale.set(1, F.ext, 1);
+  }
+  if (a & 4 && F.las) {
+    const [x, y, z] = F.las;
+    box(G, 0.056, 0.022, 0.027, x, y, z, M.poly);
+    box(G, 0.034, 0.007, 0.022, x, y + 0.014, z, M.metal2);
+    box(G, 0.012, 0.006, 0.006, x - 0.018, y - 0.012, z + 0.008, M.metal2);
+    cylX(G, 0.0048, x + 0.028, x + 0.0305, y + 0.004, M.red, z, 12);
+    cylX(G, 0.0038, x + 0.028, x + 0.0295, y - 0.005, M.glass, z, 10);
+    d.laser = P2L(x + 0.034, y + 0.004, z);
+  }
+  return g;
+}
+
 const BUILDERS = { pistol: buildPistol, revolver: buildRevolver, smg: buildSMG, shotgun: buildShotgun, rifle: buildRifle, m4: buildM4, sniper: buildSniper, knife: buildKnife };
 export function buildGun(type, M) { return BUILDERS[type](M); }
 
@@ -417,14 +468,87 @@ function mergeToVertexColors(root, boost = 1) {
 
 const gunGeoCache = {};
 let cacheMats = null;
-export function mergedGunGeometry(type) {
-  if (!gunGeoCache[type]) {
+export function mergedGunGeometry(type, att = 0) {
+  const key = type + ':' + (att | 0);
+  if (!gunGeoCache[key]) {
     cacheMats ||= gunMaterials();
     const gun = type === 'nade' ? buildGrenade(cacheMats) : buildGun(type, cacheMats);
+    if (att && type !== 'nade') decorateGun(gun, type, att, cacheMats);
     const geo = mergeToVertexColors(gun, 1.8);
-    gunGeoCache[type] = { geo, data: gun.userData };
+    gunGeoCache[key] = { geo, data: gun.userData };
   }
-  return gunGeoCache[type];
+  return gunGeoCache[key];
+}
+
+// ---------- loot items (origin at the bottom center, resting on the carpet) ----------
+const itemGeoCache = {};
+export const cashStacks = (v) => (v >= 100 ? 3 : v >= 45 ? 2 : 1);
+export function mergedItemGeometry(k, v = 0) {
+  const key = k === 'cash' ? 'cash' + cashStacks(v) : k;
+  if (itemGeoCache[key]) return itemGeoCache[key];
+  cacheMats ||= gunMaterials();
+  const M = cacheMats, g = new THREE.Group();
+  const C = (c) => new THREE.MeshBasicMaterial({ color: c });
+  const cyl = (r0, r1, len, x, y, z, mat, seg = 16) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, len, seg).rotateZ(-Math.PI / 2), mat); m.position.set(x, y, z); g.add(m); return m; };
+  switch (k) {
+    case 'ammo': { // M2A1 ammo can
+      const olive = C(0x3f4a29), dark = C(0x262b1a);
+      box(g, 0.27, 0.15, 0.125, 0, 0.075, 0, olive);
+      box(g, 0.28, 0.022, 0.135, 0, 0.16, 0, C(0x38421f));
+      box(g, 0.285, 0.012, 0.03, 0, 0.152, 0.055, dark);
+      box(g, 0.1, 0.01, 0.018, 0, 0.19, 0, C(0x1f1f1f));
+      for (const x of [-0.048, 0.048]) box(g, 0.008, 0.02, 0.012, x, 0.18, 0, C(0x1f1f1f));
+      box(g, 0.012, 0.06, 0.04, 0.14, 0.12, 0, dark);
+      box(g, 0.14, 0.018, 0.127, -0.02, 0.09, 0, C(0xa8913a)); // stencil band
+      box(g, 0.06, 0.01, 0.127, 0.07, 0.05, 0, C(0x8d7a33));
+      break;
+    }
+    case 'med': { // first aid kit
+      const white = C(0xd8d3c6), red = C(0xa51417);
+      box(g, 0.24, 0.085, 0.165, 0, 0.0425, 0, white);
+      box(g, 0.244, 0.012, 0.169, 0, 0.06, 0, C(0xb9b3a4));
+      box(g, 0.11, 0.004, 0.032, 0, 0.087, 0, red); box(g, 0.032, 0.004, 0.11, 0, 0.087, 0, red);
+      box(g, 0.05, 0.016, 0.003, -0.05, 0.042, 0.084, red); box(g, 0.016, 0.05, 0.003, -0.05, 0.042, 0.084, red);
+      for (const x of [0.06, 0.1]) box(g, 0.022, 0.018, 0.006, x, 0.06, 0.084, C(0x2a2a2a));
+      box(g, 0.08, 0.01, 0.016, 0, 0.094, -0.06, C(0x2a2a2a));
+      break;
+    }
+    case 'water': { // almond water: a milky plastic bottle lying on its side
+      cyl(0.034, 0.034, 0.19, 0, 0.034, 0, C(0xcfd3c4));
+      cyl(0.034, 0.015, 0.032, 0.111, 0.034, 0, C(0xc6cabb));
+      cyl(0.0155, 0.0155, 0.02, 0.137, 0.034, 0, C(0x2c5ca8));
+      cyl(0.0348, 0.0348, 0.1, -0.012, 0.034, 0, C(0xc49a5a));
+      cyl(0.0352, 0.0352, 0.02, -0.012, 0.034, 0, C(0x6a4424));
+      cyl(0.033, 0.03, 0.012, -0.101, 0.034, 0, C(0xb8bcaf));
+      break;
+    }
+    case 'armor': { // ceramic rifle plate with shooter's cut corners, lying flat
+      const sh = mkShape([[-0.125, -0.16], [0.125, -0.16], [0.125, 0.1], [0.07, 0.16], [-0.07, 0.16], [-0.125, 0.1]]);
+      const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.018, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 2 });
+      geo.rotateX(-Math.PI / 2); geo.translate(0, 0.004, 0);
+      g.add(new THREE.Mesh(geo, C(0x383b33)));
+      box(g, 0.11, 0.003, 0.07, 0, 0.0265, 0.03, C(0x8a7c55));
+      box(g, 0.06, 0.003, 0.012, 0, 0.0275, -0.05, C(0x1c1c1c));
+      break;
+    }
+    case 'nade': {
+      const n = buildGrenade(M); n.rotation.z = Math.PI / 2; n.position.y = 0.034; g.add(n);
+      break;
+    }
+    case 'cash': { // banded stacks of worn notes
+      const spots = [[0, 0, 0, 0.1], [0.012, 1, 0.006, 0.35], [-0.03, 0, 0.08, -0.25]];
+      for (let i = 0; i < cashStacks(v); i++) {
+        const [x, lvl, z, r] = spots[i], s = new THREE.Group();
+        s.position.set(x, 0.012 + lvl * 0.024, z); s.rotation.y = r; g.add(s);
+        box(s, 0.156, 0.022, 0.068, 0, 0, 0, C(0x6c7a58));
+        box(s, 0.15, 0.0225, 0.062, 0, 0, 0, C(0x7c8a66));
+        box(s, 0.03, 0.0235, 0.0695, 0, 0, 0, C(0xd4ccae));
+      }
+      break;
+    }
+  }
+  itemGeoCache[key] = mergeToVertexColors(g, 1.8);
+  return itemGeoCache[key];
 }
 
 // ---------- limbs ----------
@@ -644,19 +768,58 @@ export class Soldier {
     this.beam.visible = false;
     this.setWeapon(weapon || 'pistol');
   }
-  setWeapon(type) {
-    if (this.gunType === type) return;
+  setWeapon(type, att = 0) {
+    if (this.gunType === type && this.gunAtt === att) return;
     if (this.gun) this.aim.remove(this.gun);
-    const { geo, data } = mergedGunGeometry(type);
+    const { geo, data } = mergedGunGeometry(type, att);
     this.gun = new THREE.Mesh(geo, this.mat);
     this.gun.userData = data;
-    this.gunType = type;
+    this.gunType = type; this.gunAtt = att;
     const h = HOLD[type] || HOLD.default;
     this.gun.position.set(h[0], h[1], h[2]);
     this.aim.add(this.gun);
     this.gun.add(this.beam); this.beam.position.copy(data.muzzle);
   }
   muzzleWorld(out) { return out.copy(this.gun.userData.muzzle).applyMatrix4(this.gun.matrixWorld); }
+
+  // ---- ragdoll-style corpse: the whole body is thrown, tumbles about the hips and goes limp ----
+  // c: { x, y, z (hip center), yaw, dir (fall direction, model space), th (tumble angle), air (0..1), t, head, seed }
+  ragdoll(dt, c, light) {
+    this.mat.userData.uLight.value.setRGB(light, light * 0.96, light * 0.85);
+    this.beam.visible = false;
+    if (this.marker) this.marker.visible = false;
+    this.gun.visible = false;
+    this.root.position.set(c.x, c.y - 0.95, c.z);
+    this.root.rotation.y = c.yaw;
+    this.axis.set(Math.cos(c.dir), 0, -Math.sin(c.dir));
+    this.body.quaternion.setFromAxisAngle(this.axis, c.th);
+    this.q.setFromAxisAngle(UP, c.twist || 0);
+    this.body.quaternion.premultiply(this.q);
+    // rotate about the hips instead of the feet
+    this.v1.set(0, 0.95, 0);
+    this.v2.copy(this.v1).applyQuaternion(this.body.quaternion);
+    this.body.position.copy(this.v1).sub(this.v2);
+    const t = c.t, a = c.air, sd = c.seed || 0, limp = 1 - a;
+    this.pelvis.position.y = 0.95; this.spine.position.y = 0.97;
+    this.spine.rotation.set(-0.25 * limp + Math.sin(t * 11 + sd) * 0.25 * a, Math.sin(sd * 3) * 0.2, Math.sin(sd) * 0.25);
+    this.neck.rotation.set(c.head ? -0.75 : 0.35 * limp - 0.2 + Math.sin(t * 13 + sd) * 0.4 * a, 0, Math.sin(sd * 5) * 0.5 * limp);
+    this.legs.forEach((l, i) => {
+      const s2 = i ? 1 : -1;
+      l.hip.position.y = 0.92;
+      l.hip.rotation.set(Math.sin(t * 9 + i * 2.1 + sd) * 0.7 * a + (0.15 + 0.2 * Math.sin(sd + i)) * limp, 0, s2 * (0.12 + 0.1 * limp));
+      l.knee.rotation.x = -(0.25 + Math.abs(Math.sin(t * 7 + i + sd)) * 0.8 * a + (i ? 0.35 : 0.1) * limp);
+    });
+    // arms flail in the air and fall open on the carpet
+    for (let i = 0; i < 2; i++) {
+      const ar = this.arms[i], sx = i === 0 ? 0.23 : -0.23, sg = Math.sign(sx);
+      const sh = this.v2.set(sx, 0.5, 0.02);
+      const hand = this.v1.set(sx + sg * (0.42 + 0.1 * Math.sin(sd + i)), 0.62 + 0.25 * Math.sin(sd * 2 + i), 0.12 * Math.sin(sd * 4 + i));
+      hand.x += Math.sin(t * 10 + i * 1.7 + sd) * 0.2 * a; hand.y += Math.cos(t * 8 + i + sd) * 0.3 * a;
+      const e = this.v3.addVectors(sh, hand).multiplyScalar(0.5); e.y -= 0.06;
+      spanBetween(ar.u, sh, e); spanBetween(ar.f, e, hand);
+      ar.h.position.copy(hand);
+    }
+  }
   // small blue chevron over teammates' heads (team deathmatch)
   setFriendly(on) {
     if (on && !this.marker) {

@@ -49,6 +49,8 @@ try {
   const shot = await page.evaluate((i) => { const g = window.__game; return { kills: g.me.kills, mag: g.cur().mag, feed: document.getElementById('feed').textContent, hp: g.net.core.players.get(i).hp }; }, id);
   ok(shot.kills > 0 || shot.hp <= 0, `pistol kills a bot (${JSON.stringify(shot)})`);
   ok(await wait(() => document.getElementById('feed').textContent.length > 0, null, 10000), 'kill feed updates');
+  ok(await wait(() => window.__game.me.cash > 0, null, 10000), 'the kill pays money');
+  ok(await wait(() => window.__game.corpses.length > 0 && window.__game.corpses.every((b) => b.still), null, 30000), 'the body is thrown and comes to rest on the carpet');
 
   const picked = await page.evaluate(async () => {
     const g = window.__game, d = [...g.drops.values()].find((x) => x.w === 'm4');
@@ -61,6 +63,49 @@ try {
     return g.me.inv.primary?.w;
   });
   ok(picked === 'm4', 'dropped weapon can be picked up');
+
+  // crate: look at it, open it, the loot flies out and lands; guns wait on the floor
+  const crate = await page.evaluate(async () => {
+    const M = await import('/js/shared/map.js');
+    const g = window.__game;
+    for (const c of g.map.crates) for (let a = 0; a < 6.28; a += 0.3) {
+      const ux = Math.sin(a), uz = Math.cos(a);
+      if (M.raycast(g.map, c.x, c.z, ux, uz, 2.2) < 2.1) continue;
+      const p = M.collide(g.map, { x: c.x + ux * 1.5, z: c.z + uz * 1.5 }, 0.32);
+      if (Math.hypot(p.x - c.x, p.z - c.z) < 1.3) continue;
+      g.me.pos.set(p.x, 0, p.z); Object.assign(g.net.core.players.get(g.myId), { x: p.x, z: p.z });
+      g.me.yaw = Math.atan2(-(c.x - p.x), -(c.z - p.z)); g.me.pitch = -0.45;
+      return c.id;
+    }
+    return -1;
+  });
+  ok(await wait((id) => window.__game.nearCrate === id, crate, 20000), 'looking at a crate offers to open it');
+  await page.evaluate(() => { window.__game.lastUse = -9; window.__game.interact(); });
+  ok(await wait((id) => window.__game.world.crateState[id].target === 1 && window.__game.drops.size > 0, crate, 20000), 'crate opens and loot pops out');
+  ok(await wait(() => [...window.__game.drops.values()].every((d) => !d.fly), null, 20000), 'loot lands on the carpet');
+
+  // vending machine: buy a plate, it drops out, walking over it puts it on
+  const vend = await page.evaluate(async () => {
+    const g = window.__game, c = g.net.core, v = g.map.vendors[0];
+    const x = v.x + v.nx * 1.3, z = v.z + v.nz * 1.3;
+    g.me.pos.set(x, 0, z); Object.assign(c.players.get(g.myId), { x, z, cash: 500, armor: 0 });
+    g.me.cash = 500; g.me.armor = 0;
+    g.me.yaw = Math.atan2(v.nx, v.nz); g.me.pitch = -0.05;
+    for (let i = 0; i < 100 && g.nearVendor !== v; i++) await new Promise((r) => setTimeout(r, 100));
+    g.lastUse = -9; g.interact();
+    return !!g.shop;
+  });
+  ok(vend, 'looking at a vending machine opens the shop');
+  await page.evaluate(async () => {
+    const g = window.__game, { SHOP } = await import('/js/shared/items.js');
+    g.shop.sel = SHOP.findIndex((s) => s.id === 'armor'); g.lastBuy = -9; g.buySelected();
+  });
+  ok(await wait(() => { const g = window.__game; return g.me.cash < 500 && [...g.drops.values()].some((d) => d.k === 'armor' && !d.fly); }, null, 20000), 'bought plate is dispensed');
+  await page.evaluate(() => {
+    const g = window.__game, d = [...g.drops.values()].find((x) => x.k === 'armor');
+    g.closeShop(); g.me.pos.set(d.x, 0, d.z); Object.assign(g.net.core.players.get(g.myId), { x: d.x, z: d.z });
+  });
+  ok(await wait(() => window.__game.me.armor > 0, null, 20000), 'walking over the plate picks it up');
 
   await page.evaluate(() => window.__game.equip('melee'));
   await wait(() => window.__game.me.slot === 'melee' && !window.__game.vm.animName);

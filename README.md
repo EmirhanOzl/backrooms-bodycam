@@ -48,7 +48,7 @@ Aşağıdakiler varsayılanlardır.
 | R | şarjör değiştir |
 | B | atış modu (otomatik / 3'lü / tek atış) |
 | G veya 4 | el bombası — basılı tut: pimi çek ve beklet (pişir), bırak: at |
-| F | kutu aç · yerdeki silahı al / değiştir |
+| F | baktığın şeyi kullan: kutu aç · yerdeki silahı al / değiştir · otomatı aç |
 | T | fener |
 | V | silahı incele |
 | 1 / 2 / 3, tekerlek | birincil / ikincil / bıçak |
@@ -62,7 +62,7 @@ Aşağıdakiler varsayılanlardır.
 | Sol çubuk / sağ çubuk | hareket (analog yürüme) / bakış |
 | RT / LT | ateş / nişan al (bıçakta ağır saplama) |
 | A / B | zıpla / çömel |
-| X | bağlama göre: kutu aç · silah al, yoksa şarjör değiştir |
+| X | bağlama göre: kutu aç · silah al · otomat, yoksa şarjör değiştir |
 | Y / LB | birincil ↔ ikincil / bıçak |
 | RB | el bombası (basılı tut: beklet) |
 | L3 / R3 | koş / silahı incele |
@@ -70,6 +70,7 @@ Aşağıdakiler varsayılanlardır.
 | View (basılı) / Menu | skor tablosu / duraklat |
 
 Atış, isabet alma ve patlamalar titreşimle hissedilir; nişangah düşmanın üzerindeyken bakış hafifçe yavaşlar.
+Otomat menüsünde: yön yukarı / aşağı seç, A satın al, B kapat.
 
 ## Silahlar
 
@@ -86,11 +87,35 @@ Atış, isabet alma ve patlamalar titreşimle hissedilir; nişangah düşmanın 
 | M67 el bombası | — | seker, yuvarlanır; duvar arkasına hasar vermez; bekletilebilir (elde patlayabilir!) |
 
 - Doluyken şarjör değiştirmek namludaki mermiyi korur (30+1); boş şarjör değişimi daha uzun sürer (kurma kolu).
-- Kutular (F) rastgele silah, mermi, el bombası, ilk yardım (+50) veya zırh plakası (+50) verir; 40 sn sonra yeniden dolar.
-  O yuvada zaten silahın varsa yeni silah kutunun yanına yere bırakılır — istersen F ile değiştirirsin.
-- Ölen operatörün silahı yere düşer; 45 sn boyunca alınabilir.
+
+### Eklentiler
+
+| Eklenti | Uyduğu silahlar | Etkisi |
+| --- | --- | --- |
+| Susturucu | G17, MP5, AK-47, M4A1, R700 | sessiz ve alevsiz atış, botlar seni çok daha zor duyar · menzilde hafif hasar kaybı |
+| Uzatılmış şarjör | G17 (33), MP5 (40), M870 (8), AK-47 (45), M4A1 (40), R700 (10) | daha çok mermi · %12 daha yavaş şarjör değişimi |
+| Lazer | tüm ateşli silahlar | belden atış çok daha isabetli, nokta nişangaha sıfırlı · ışını ve noktası herkes görür |
+
+Eklentiler silahta kalır: silah yere düşerse (ölünce ya da değiştirince) eklentileriyle birlikte düşer.
 
 ## Oynanış
+
+### Ganimet → para → otomat döngüsü
+
+- **Her şey fiziksel:** kutudan, cesetten ya da otomattan çıkan eşyalar havaya fırlar, halıya düşer ve orada durur.
+  Silahlara **bakıp F** ile alırsın (yuvan doluysa eldeki yere bırakılır); ilk yardım, badem suyu, zırh plakası,
+  el bombası, mermi kutusu ve para **üzerinden geçince** — işine yarıyorsa — alınır. Bakılan eşya hafifçe parlar.
+- **Kutular** bir ana eşya (silah, mermi, el bombası, ilk yardım, badem suyu, zırh) ve çoğu zaman biraz para verir;
+  40 sn sonra yeniden dolar. Kutudan çıkan silah da yere düşer — kimse eline zorla silah tutuşturmaz.
+- **Para:** leş başına $100 ve stil bonusları — KAFADAN, SIRTTAN BIÇAK, BIÇAKLA, UÇURDU (el bombası), UZAK ATIŞ (25 m+),
+  HAVADA, DÜRBÜNSÜZ (R700 nişan almadan), ÇOKLU LEŞ, İNTİKAM, İLK KAN, SERİ BİTİRİCİ, SON NEFES. Kazanç ekranda kalem
+  kalem akar. Ölünce paranın dörtte biri cesedin yanına saçılır.
+- **Badem suyu otomatları** (her seviyede 4 tane, duvar diplerinde, ışıkları uzaktan görünür): bakıp F ile aç;
+  sağlık, zırh, mermi, el bombası, her silah ve eklentiler satılır. Aldığın şey bölmeden yuvarlanarak önüne düşer.
+  Botlar da para biriktirip otomattan silah ve zırh alır.
+- **Cesetler savrulur:** öldüren darbe gövdeyi fırlatır — pompalı yakından geri iter, el bombası havaya uçurur,
+  kafadan vuruş başı geriye atar. Gövde havada döner, duvara çarpıp sekebilir, halıya yığılır ve bir süre orada kalır.
+  Sen ölürsen göğüs kameran da gövdeyle birlikte uçar.
 
 - **Herkes herkese (FFA):** leş limitine ulaşan ya da süre bitince önde olan kazanır.
 - **Takım çatışması (TDM):** MAVİ ve KIRMIZI takımlar; dost ateşi yok, takım arkadaşlarının başında mavi işaret görünür,
@@ -119,8 +144,9 @@ hareket bulanıklığı, parlaklık, FPS göstergesi), Ses (ana, efekt, ortam, a
 
 - `lib/server.js` — statik dosya sunucusu + WebSocket (`/ws`) + `/info` (LAN adresleri), 30 Hz yetkili simülasyon;
   `server.js` (CLI) ve `desktop/main.cjs` (Electron) bunu kullanır.
-- `public/js/shared/` — sunucu ve istemcinin ortak kodu: harita üretimi, ışın izleme, çarpışma, yol bulma (`map.js`),
-  silah verileri (`weapons.js`), deterministik el bombası fiziği (`physics.js`), oyun çekirdeği ve bot yapay zekası (`core.js`:
+- `public/js/shared/` — sunucu ve istemcinin ortak kodu: harita üretimi (otomatlar dahil), ışın izleme, çarpışma, yol bulma (`map.js`),
+  silah verileri (`weapons.js`), ganimet / para / otomat / eklenti verileri (`items.js`), deterministik el bombası fiziği (`physics.js`),
+  oyun çekirdeği ve bot yapay zekası (`core.js`: yere fırlayan eşyalar, para ve stil bonusları, otomat alışverişi, ceset fırlatma hızı,
   envanter yuvaları, bıçak, el bombası, yere düşen silahlar, maç süresi/istatistikler; botlar kutu açar, silah toplar,
   bıçak kullanır, el bombası atar ve bombalardan kaçar).
 - `public/js/main.js` — istemci: hareket, atış (kare hızından bağımsız atış ritmi), durum makineleri (şarjör, fişek fişek
@@ -135,7 +161,8 @@ hareket bulanıklığı, parlaklık, FPS göstergesi), Ses (ana, efekt, ortam, a
   ses saatine planlanır → takılma yok, tam otomatik ritim düzgün.
 - `public/js/world.js` — harita geometrisi; floresan ışıkları görünürlük testli olarak halıya (ışık haritası) ve duvarlara pişirilir.
 - `public/js/post.js` — bodycam lensi: HDR, bloom, balık gözü, kromatik sapma, dönüş bulanıklığı, gren, vinyet, dürbün.
-- `public/js/models.js` — prosedürel silah modelleri (hareketli şarjör/sürgü/pompa/topluluk/sürgü kolu), eldivenli kollar,
-  operatör modelleri (yönlü ölüm animasyonu).
+- `public/js/models.js` — prosedürel silah modelleri (hareketli şarjör/sürgü/pompa/topluluk/sürgü kolu) ve eklentileri
+  (susturucu, uzatılmış şarjör, lazer), ganimet modelleri (mermi kutusu, ilk yardım, badem suyu, zırh plakası, para),
+  eldivenli kollar, operatör modelleri (savrulan, dönen ve yığılan ceset pozu).
 - `public/js/effects.js` — parçacıklar, kurşun deliği / kan / yanık izleri, iz mermileri, namlu alevi, kovanlar, toz zerrecikleri.
 - Tek bağımlılıklar `three` ve `ws`.

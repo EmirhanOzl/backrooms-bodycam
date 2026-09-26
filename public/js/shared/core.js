@@ -1,7 +1,8 @@
 // Authoritative game simulation. Runs in Node (multiplayer server), in a Web Worker (offline vs bots)
 // or on the page's main thread as a fallback. No DOM access.
-import { generateMap, raycast, lineOfSight, collide, findPath, cellIndex, cellCenter } from './map.js';
-import { WEAPONS, GRENADE, MAX_NADES, WEAPON_RANK, dmgAt, rollLoot, zoneMul, meleeDamage, blastDamage, WEAPON_ORDER } from './weapons.js';
+import { generateMap, raycast, lineOfSight, collide, findPath, cellIndex, cellCenter, CRATE_H } from './map.js';
+import { WEAPONS, GRENADE, MAX_NADES, dmgAt, zoneMul, meleeDamage, blastDamage, WEAPON_ORDER } from './weapons.js';
+import { ITEMS, ATT, fitsAtt, magSize, shotNoise, ECON, BONUS, SHOP, VENDOR_R, WEAPON_RANK, crateLoot } from './items.js';
 import { NADE_STEP, makeNade, stepNade } from './physics.js';
 
 export const PLAYER_R = 0.32;
@@ -25,6 +26,8 @@ const DIFF = [
   { react: 0.28, acc: 0.42, turn: 11, rate: 0.88, hs: 0.16, nade: 0.55, crouch: 0.35, melee: 1 },
 ];
 const BOT_PRIMARY = [['smg', 30], ['shotgun', 22], ['rifle', 20], ['m4', 20], ['sniper', 8]];
+// body launch on a kill by weapon: [horizontal m/s, upward m/s]
+const KNOCK = { pistol: [1.3, 0.3], revolver: [2.6, 0.7], smg: [1.5, 0.35], shotgun: [5.2, 1.6], rifle: [2.1, 0.5], m4: [1.9, 0.45], sniper: [4.2, 1.1], knife: [1.2, 0.2] };
 
 const r2 = (v) => Math.round(v * 100) / 100;
 const r3 = (v) => Math.round(v * 1000) / 1000;
@@ -67,6 +70,7 @@ export class GameCore {
     this.noises = [];
     this.intermission = 0;
     this.matchStart = this.time;
+    this.firstBlood = false;
   }
 
   // ---- connection API ----
@@ -93,7 +97,7 @@ export class GameCore {
       this.send(id, {
         t: 'welcome', id, seed: this.seed, size: this.size, light: this.light, crates: this.crates.map((k) => (k.open ? 1 : 0)),
         drops: [...this.drops.values()].map(dropMsg), fragLimit: this.fragLimit, timeLimit: this.timeLimit, st: r3(this.time),
-        mode: this.mode, team: p.team, teamScore: this.teamScore,
+        mode: this.mode, team: p.team, teamScore: this.teamScore, cash: p.cash,
       });
       this.broadcastRoster();
       this.send(id, this.spawnMsg(p));
@@ -120,6 +124,7 @@ export class GameCore {
       case 'nade': this.onNade(p, msg); return;
       case 'open': this.onOpen(p, msg.id | 0); return;
       case 'pickup': this.onPickup(p, msg.id | 0); return;
+      case 'buy': this.onBuy(p, msg); return;
       case 'step': if (p.alive) this.noise(p, msg.run ? 10 : 6); return;
     }
   }
@@ -135,6 +140,7 @@ export class GameCore {
       weapon: 'pistol', primary: null, secondary: 'pistol', nades: 1, team: -1,
       kills: 0, deaths: 0, hs: 0, shots: 0, hits: 0, dmgDone: 0, streak: 0, best: 0,
       lastShot: -1, lastSwing: -9, swingHeavy: false, swingUsed: true, lastNade: -9,
+      cash: 0, earned: 0, att: {}, lastKillT: -9, multi: 0, lastKiller: null, vendT: -9,
       // bot brain
       path: null, pi: 0, target: null, scanT: 0, reactUntil: 0, nextShot: 0, reloadUntil: 0, switchUntil: 0, ammo: {},
       burst: 0, strafe: 1, strafeT: 0, crouchT: 0, lastSeen: null, stuckT: 0, goal: null, lootT: 0, aimT: 0,
@@ -142,7 +148,7 @@ export class GameCore {
     };
   }
 
-  resetStats(p) { p.kills = p.deaths = p.hs = p.shots = p.hits = p.dmgDone = p.streak = p.best = 0; }
+  resetStats(p) { p.kills = p.deaths = p.hs = p.shots = p.hits = p.dmgDone = p.streak = p.best = p.cash = p.earned = p.multi = 0; p.lastKiller = null; }
 
   syncBots() {
     const humans = [...this.players.values()].filter((p) => !p.bot).length;
@@ -209,7 +215,7 @@ export class GameCore {
     p.yaw = Math.random() * Math.PI * 2; p.pitch = 0;
     p.hp = MAX_HP; p.armor = 0; p.alive = true; p.spawnT = this.time; p.protect = this.time + PROTECT_T;
     p.path = null; p.target = null; p.lastSeen = null; p.goal = null; p.streak = 0;
-    p.secondary = 'pistol'; p.primary = null; p.nades = 1; p.swingUsed = true;
+    p.secondary = 'pistol'; p.primary = null; p.nades = 1; p.swingUsed = true; p.att = {};
     if (p.bot) {
       if (Math.random() < 0.55) p.primary = pickWeighted(BOT_PRIMARY);
       p.ammo = { pistol: WEAPONS.pistol.mag };
@@ -221,10 +227,11 @@ export class GameCore {
     }
   }
 
-  spawnMsg(p) { return { t: 'spawn', x: r2(p.x), z: r2(p.z), yaw: r2(p.yaw), inv: { p: p.primary, s: p.secondary, n: p.nades } }; }
+  spawnMsg(p) { return { t: 'spawn', x: r2(p.x), z: r2(p.z), yaw: r2(p.yaw), cash: p.cash, inv: { p: p.primary, s: p.secondary, n: p.nades } }; }
 
   // zone: 'h' head, 'b' torso (plate applies), 'l' legs, 'k' knife, 'back' backstab, 'x' explosion
-  damage(t, amount, a, weapon, zone) {
+  // src: explosion center [x, y, z] (throws the body away from it)
+  damage(t, amount, a, weapon, zone, src) {
     if (!t.alive || this.intermission) return false;
     if (a !== t && !this.foes(a, t)) return false; // no friendly fire
     if (this.time < t.protect) return false;
@@ -239,22 +246,65 @@ export class GameCore {
     if (!t.bot) this.send(t.id, { t: 'hurt', from: [r2(a.x), r2(a.z)], by: a.id, dmg: Math.round(amount), zone, w: weapon, hp: Math.ceil(t.hp), armor: Math.ceil(t.armor) });
     else if (a !== t && !kill) this.botAlert(t, a);
     if (!a.bot && a !== t) this.send(a.id, { t: 'hit', kill, zone, plate, id: t.id, dmg: Math.round(d) });
-    if (kill) this.kill(t, a, weapon, zone);
+    if (kill) this.kill(t, a, weapon, zone, src);
     return true;
   }
 
-  kill(t, a, weapon, zone) {
+  kill(t, a, weapon, zone, src) {
+    const victimStreak = t.streak;
     t.alive = false; t.hp = 0; t.deaths++; t.streak = 0;
     t.respawnAt = this.time + RESPAWN_T;
-    this.dropWeapons(t);
+    const im = this.knockback(t, a, weapon, zone, src);
+    this.dropLoot(t, im);
     let streak = 0;
     if (a !== t) {
       a.kills++; a.streak++; a.best = Math.max(a.best, a.streak); streak = a.streak;
       if (zone === 'h') a.hs++;
       if (this.mode === 'tdm') this.teamScore[a.team]++;
+      t.lastKiller = a.id;
+      this.award(a, t, weapon, zone, victimStreak);
     } else a.kills = Math.max(0, a.kills - 1); // suicide penalty
-    this.broadcast({ t: 'kill', k: a.id, v: t.id, w: weapon, z: zone, s: streak, kp: [r2(a.x), r2(a.z)], ts: this.mode === 'tdm' ? this.teamScore : undefined });
+    this.broadcast({ t: 'kill', k: a.id, v: t.id, w: weapon, z: zone, s: streak, kp: [r2(a.x), r2(a.z)], im, ts: this.mode === 'tdm' ? this.teamScore : undefined });
     if (a !== t && (this.mode === 'tdm' ? this.teamScore[a.team] >= this.fragLimit : a.kills >= this.fragLimit)) this.endMatch(a);
+  }
+
+  // launch velocity of the body [vx, vy, vz] (m/s): explosions throw it, big rounds shove it
+  knockback(t, a, weapon, zone, src) {
+    let dx, dz, sp, up;
+    if (src) {
+      dx = t.x - src[0]; dz = t.z - src[2];
+      const d = Math.hypot(dx, dz, (t.y + 1) - src[1]);
+      sp = clamp(6 - d * 0.8, 1.8, 4.8); up = clamp(6.8 - d * 0.7, 2.2, 5.8);
+    } else {
+      dx = t.x - a.x; dz = t.z - a.z;
+      const d = Math.hypot(dx, dz), K = KNOCK[weapon] || KNOCK.pistol;
+      const fall = weapon === 'shotgun' ? clamp(1.2 - d / 14, 0.25, 1) : 1;
+      sp = K[0] * fall * (zone === 'h' ? 1.15 : 1); up = K[1] * fall;
+    }
+    const L = Math.hypot(dx, dz) || 1;
+    if (L < 1e-3) { dx = Math.sin(t.yaw); dz = Math.cos(t.yaw); }
+    return [r2((dx / L) * sp), r2(up), r2((dz / L) * sp)];
+  }
+
+  // money for a kill: base pay plus style bonuses, itemized for the killer's HUD
+  award(a, t, weapon, zone, victimStreak) {
+    const lines = [['LEŞ', ECON.kill]];
+    const add = (b) => lines.push(b);
+    if (zone === 'h') add(BONUS.head);
+    if (zone === 'back') add(BONUS.back); else if (weapon === 'knife') add(BONUS.knife);
+    if (weapon === 'nade') add(BONUS.nade);
+    if (weapon !== 'nade' && Math.hypot(t.x - a.x, t.z - a.z) >= 25) add(BONUS.long);
+    if (a.y > 0.3 || t.y > 0.3) add(BONUS.air);
+    if (weapon === 'sniper' && !a.bot && !(a.flags & F.ADS)) add(BONUS.noscope);
+    if (this.time - a.lastKillT < 4) { a.multi++; add([`${BONUS.multi[0]} ×${a.multi + 1}`, BONUS.multi[1] * a.multi]); } else a.multi = 0;
+    a.lastKillT = this.time;
+    if (a.lastKiller === t.id) { add(BONUS.revenge); a.lastKiller = null; }
+    if (!this.firstBlood) { this.firstBlood = true; add(BONUS.first); }
+    if (victimStreak >= 3) add(BONUS.ender);
+    if (a.alive && a.hp < 20) add(BONUS.clutch);
+    const total = lines.reduce((s, l) => s + l[1], 0);
+    a.cash += total; a.earned += total;
+    if (!a.bot) this.send(a.id, { t: 'cash', cash: a.cash, add: total, lines });
   }
 
   endMatch(winner) {
@@ -269,7 +319,7 @@ export class GameCore {
   table() {
     return [...this.players.values()]
       .sort((x, y) => y.kills - x.kills || x.deaths - y.deaths)
-      .map((p) => ({ id: p.id, name: p.name, bot: p.bot, team: p.team, k: p.kills, d: p.deaths, hs: p.hs, acc: p.shots ? Math.round((p.hits / p.shots) * 100) : 0, best: p.best, dmg: Math.round(p.dmgDone) }));
+      .map((p) => ({ id: p.id, name: p.name, bot: p.bot, team: p.team, k: p.kills, d: p.deaths, hs: p.hs, acc: p.shots ? Math.round((p.hits / p.shots) * 100) : 0, best: p.best, dmg: Math.round(p.dmgDone), cash: p.earned }));
   }
 
   newMatch() {
@@ -280,39 +330,97 @@ export class GameCore {
     for (const p of this.players.values()) { this.resetStats(p); this.spawn(p); if (!p.bot) this.send(p.id, this.spawnMsg(p)); }
   }
 
-  // ---- drops (weapons lying on the carpet) ----
-  addDrop(w, x, z) {
-    const d = { id: ++this.dropSeq, w, x: x + (Math.random() - 0.5) * 0.5, z: z + (Math.random() - 0.5) * 0.5, yaw: Math.random() * Math.PI * 2, expire: this.time + 45 };
-    collide(this.map, d, 0.3);
+  // ---- items lying on the carpet (weapons, ammo, health, armor, grenades, money) ----
+  // from: [x, y, z] the item was thrown from (clients animate the arc); it can be taken once it has landed
+  addItem(it, x, z, from) {
+    const d = {
+      id: ++this.dropSeq, k: it.k, w: it.k === 'weapon' ? it.w : null, v: it.v | 0, a: it.a | 0, x, z,
+      yaw: Math.random() * Math.PI * 2, expire: this.time + ITEMS[it.k].expire, ready: this.time + (from ? 0.4 : 0),
+    };
+    collide(this.map, d, 0.2);
     d.x = r2(d.x); d.z = r2(d.z); d.yaw = r2(d.yaw);
     this.drops.set(d.id, d);
-    if (this.drops.size > 32) this.removeDrop(this.drops.keys().next().value);
-    this.broadcast({ t: 'drop', d: dropMsg(d) });
+    if (this.drops.size > 48) this.removeDrop(this.drops.keys().next().value);
+    const m = dropMsg(d);
+    if (from) m.f = from.map(r2);
+    this.broadcast({ t: 'drop', d: m });
     return d;
   }
+  addDrop(w, x, z, from, a = 0) { return this.addItem({ k: 'weapon', w, a }, x, z, from); }
   removeDrop(id) { if (this.drops.delete(id)) this.broadcast({ t: 'undrop', id }); }
-  dropWeapons(p) {
-    const w = p.primary || (p.secondary !== 'pistol' ? p.secondary : null);
-    if (w) this.addDrop(w, p.x, p.z);
-    p.primary = null;
+  // fan items out of a source (crate, body, machine), toward (tx, tz) when given
+  popItems(items, ox, oy, oz, tx, tz, spread = 1.3, r0 = 0.75) {
+    const base = tx == null ? Math.random() * Math.PI * 2 : Math.atan2(tx - ox, tz - oz);
+    const n = items.length;
+    return items.map((it, i) => {
+      const a = base + (n > 1 ? (i / (n - 1) - 0.5) * spread : 0) + (Math.random() - 0.5) * 0.35;
+      const ux = Math.sin(a), uz = Math.cos(a);
+      let r = r0 + Math.random() * 0.45;
+      const wall = raycast(this.map, ox, oz, ux, uz, r + 0.3);
+      if (wall < r + 0.3) r = Math.max(0.3, wall - 0.3);
+      return this.addItem(it, ox + ux * r, oz + uz * r, [ox, oy, oz]);
+    });
   }
-  setSlot(p, w) {
+  // a body spills its weapon, part of its money and whatever else it carried
+  dropLoot(p, im) {
+    const items = [];
+    const w = p.primary || (p.secondary !== 'pistol' ? p.secondary : null);
+    if (w) items.push({ k: 'weapon', w, a: p.att[w] | 0 });
+    const lose = Math.floor(p.cash * ECON.deathLoss);
+    if (lose >= 5) { p.cash -= lose; items.push({ k: 'cash', v: lose }); if (!p.bot) this.send(p.id, { t: 'cash', cash: p.cash, add: -lose }); }
+    if (p.nades > 0 && Math.random() < 0.5) items.push({ k: 'nade' });
+    if (Math.random() < 0.45) items.push({ k: 'ammo' });
+    p.primary = null;
+    if (!items.length) return;
+    const tx = im ? p.x + im[0] : null, tz = im ? p.z + im[2] : null;
+    this.popItems(items, p.x, 0.9, p.z, tx, tz, 2.2, 0.35);
+  }
+  setSlot(p, w, a = 0) {
     if (WEAPONS[w].slot === 'primary') p.primary = w; else p.secondary = w;
     p.weapon = w;
-    if (p.bot) { p.ammo[w] = WEAPONS[w].mag; p.reloadUntil = 0; p.switchUntil = this.time + 0.5; }
+    p.att[w] = a;
+    if (p.bot) { p.ammo[w] = magSize(w, a); p.reloadUntil = 0; p.switchUntil = this.time + 0.5; }
   }
   slotOf(p, w) { return WEAPONS[w].slot === 'primary' ? p.primary : p.secondary; }
+  // would picking this up do anything? (ammo need is only known to the human client)
+  wants(p, d) {
+    switch (d.k) {
+      case 'nade': return p.nades < MAX_NADES;
+      case 'med': case 'water': return p.hp < MAX_HP;
+      case 'armor': return p.armor < MAX_ARMOR;
+      case 'ammo': return !p.bot || !!p.reloadUntil;
+      default: return true;
+    }
+  }
 
   onPickup(p, id) {
     const d = this.drops.get(id);
-    if (!d || !p.alive) return;
-    if (Math.hypot(d.x - p.x, d.z - p.z) > 2.5) return;
-    const w = WEAPONS[d.w], old = this.slotOf(p, d.w);
+    if (!d || !p.alive || this.time < d.ready) return false;
+    if (Math.hypot(d.x - p.x, d.z - p.z) > 2.5) return false;
+    if (d.k === 'weapon') {
+      const w = WEAPONS[d.w], old = this.slotOf(p, d.w);
+      this.removeDrop(id);
+      if (old === d.w) {
+        p.att[d.w] = (p.att[d.w] | 0) | d.a;
+        if (p.bot) p.ammo[d.w] = magSize(d.w, p.att[d.w]);
+        else this.send(p.id, { t: 'got', w: d.w, slot: w.slot, ammo: 1, a: p.att[d.w] });
+        return true;
+      }
+      if (old) this.addDrop(old, d.x + (Math.random() - 0.5) * 0.4, d.z + (Math.random() - 0.5) * 0.4, [p.x, 1.1, p.z], p.att[old] | 0);
+      this.setSlot(p, d.w, d.a);
+      if (!p.bot) this.send(p.id, { t: 'got', w: d.w, slot: w.slot, a: d.a });
+      return true;
+    }
+    if (!this.wants(p, d)) return false;
+    const loot = { k: d.k, v: d.v };
+    if (d.k === 'nade') loot.n = ++p.nades;
+    else if (d.k === 'med' || d.k === 'water') p.hp = Math.min(MAX_HP, p.hp + d.v);
+    else if (d.k === 'armor') p.armor = Math.min(MAX_ARMOR, p.armor + d.v);
+    else if (d.k === 'cash') { p.cash += d.v; p.earned += d.v; }
+    else if (d.k === 'ammo' && p.bot) for (const w of Object.keys(p.ammo)) p.ammo[w] = magSize(w, p.att[w]) || 0;
     this.removeDrop(id);
-    if (old === d.w) { this.send(p.id, { t: 'got', w: d.w, slot: w.slot, ammo: 1 }); if (p.bot) p.ammo[d.w] = w.mag; return; }
-    if (old) this.addDrop(old, d.x, d.z);
-    this.setSlot(p, d.w);
-    this.send(p.id, { t: 'got', w: d.w, slot: w.slot });
+    if (!p.bot) this.send(p.id, { t: 'loot', loot, hp: Math.ceil(p.hp), armor: Math.ceil(p.armor), cash: p.cash });
+    return true;
   }
 
   onOpen(p, id) {
@@ -320,26 +428,34 @@ export class GameCore {
     if (!c || c.open || !p.alive) return;
     if (Math.hypot(mc.x - p.x, mc.z - p.z) > 2.6) return;
     c.open = true; c.respawnAt = this.time + 40;
-    let loot = rollLoot();
-    if (loot.k === 'weapon') {
-      const cur = this.slotOf(p, loot.w);
-      if (cur === loot.w) loot = { k: 'ammo', w: loot.w };
-      else if (!cur || (p.bot && WEAPON_RANK[loot.w] > WEAPON_RANK[cur])) {
-        if (cur) this.addDrop(cur, p.x, p.z);
-        this.setSlot(p, loot.w);
-        loot.slot = WEAPONS[loot.w].slot;
-      } else {
-        // slot taken: the weapon is left on the carpet next to the crate for the player to decide
-        const d = this.addDrop(loot.w, mc.x + (p.x - mc.x) * 0.4, mc.z + (p.z - mc.z) * 0.4);
-        loot = { k: 'floor', w: loot.w, id: d.id };
-      }
-    }
-    if (loot.k === 'nade') { if (p.nades >= MAX_NADES) loot = { k: 'ammo' }; else loot.n = ++p.nades; }
-    if (loot.k === 'med') p.hp = Math.min(MAX_HP, p.hp + loot.v);
-    if (loot.k === 'armor') p.armor = Math.min(MAX_ARMOR, p.armor + loot.v);
-    if (loot.k === 'ammo' && p.bot) for (const w of Object.keys(p.ammo)) p.ammo[w] = WEAPONS[w].mag || 0;
     this.broadcast({ t: 'crate', id, open: 1, by: p.id });
-    this.send(p.id, { t: 'loot', id, loot, hp: Math.ceil(p.hp), armor: Math.ceil(p.armor) });
+    this.popItems(crateLoot(), mc.x, CRATE_H + 0.12, mc.z, p.x, p.z);
+    if (p.bot) p.lootT = 0.6; // look around for what fell out
+  }
+
+  // ---- vending machines ----
+  nearVendor(p, v) { return Math.hypot(v.x + v.nx * 0.6 - p.x, v.z + v.nz * 0.6 - p.z) < VENDOR_R + 0.5; }
+  onBuy(p, msg) {
+    const item = SHOP.find((s) => s.id === msg.id), v = this.map.vendors[msg.v | 0];
+    if (!item || !v || !p.alive || this.intermission || !this.nearVendor(p, v)) return false;
+    const no = (why) => { if (!p.bot) this.send(p.id, { t: 'nobuy', id: item.id, why }); return false; };
+    if (this.time - p.vendT < 0.25) return false;
+    if (p.cash < item.price) return no('cash');
+    if (item.k === 'att') {
+      const w = msg.w;
+      if (!this.owns(p, w) || w === 'knife') return no('fit');
+      if (!fitsAtt(w, item.a)) return no('fit');
+      if ((p.att[w] | 0) & item.a) return no('has');
+      p.att[w] = (p.att[w] | 0) | item.a;
+      if (p.bot) p.ammo[w] = Math.min(p.ammo[w] ?? 0, magSize(w, p.att[w]));
+    }
+    p.cash -= item.price; p.vendT = this.time;
+    this.broadcast({ t: 'vend', v: v.id, by: p.id });
+    if (item.k === 'att') { if (!p.bot) this.send(p.id, { t: 'att', w: msg.w, a: p.att[msg.w], cash: p.cash }); return true; }
+    if (!p.bot) this.send(p.id, { t: 'cash', cash: p.cash, add: -item.price });
+    // it drops into the tray and tumbles out toward the buyer
+    this.popItems([{ k: item.k, w: item.w, v: ITEMS[item.k].v }], v.x + v.nx * 0.45, 0.3, v.z + v.nz * 0.45, p.x, p.z, 0, 0.45);
+    return true;
   }
 
   // ---- shooting ----
@@ -370,8 +486,9 @@ export class GameCore {
     p.protect = 0;
     p.shots++;
     const o = msg.o.slice(0, 3).map(Number), d = msg.d.slice(0, 3).map(Number);
-    this.broadcast({ t: 'shot', id: p.id, w: msg.w, o: o.map(r2), d: d.map(r3), ts: r3(this.time) }, p.id);
-    this.noise(p, 30);
+    const att = p.att[msg.w] | 0;
+    this.broadcast({ t: 'shot', id: p.id, w: msg.w, o: o.map(r2), d: d.map(r3), ts: r3(this.time), s: att & ATT.SUP ? 1 : undefined }, p.id);
+    this.noise(p, shotNoise(att));
     if (!Array.isArray(msg.hits)) return;
     let any = false;
     for (const h of msg.hits.slice(0, 8)) {
@@ -464,7 +581,7 @@ export class GameCore {
       if (d >= GRENADE.radius) continue;
       if (!lineOfSight(this.map, g.x, g.z, t.x, t.z)) continue;
       const dmg = blastDamage(d);
-      if (dmg > 1) this.damage(t, dmg, a || t, 'nade', 'x');
+      if (dmg > 1) this.damage(t, dmg, a || t, 'nade', 'x', [g.x, g.y, g.z]);
     }
   }
 
@@ -485,7 +602,7 @@ export class GameCore {
         }
         continue;
       }
-      if (p.bot) this.botThink(p, dt);
+      if (p.bot) { this.botThink(p, dt); this.botGrab(p); }
     }
     if (this.noises.length) this.noises = this.noises.filter((n) => t - n.t < 0.4);
     for (const c of this.crates) if (c.open && t >= c.respawnAt) { c.open = false; this.broadcast({ t: 'crate', id: c.id, open: 0 }); }
@@ -493,7 +610,7 @@ export class GameCore {
     const ps = [];
     for (const p of this.players.values()) {
       const f = (p.alive ? F.ALIVE : 0) | (p.flags & ~(F.ALIVE | F.PROTECT)) | (p.alive && t < p.protect ? F.PROTECT : 0);
-      ps.push([p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), f, WEAPON_ORDER.indexOf(p.weapon), Math.ceil(p.hp), Math.ceil(p.armor), p.kills, p.deaths, p.hs]);
+      ps.push([p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), f, WEAPON_ORDER.indexOf(p.weapon), Math.ceil(p.hp), Math.ceil(p.armor), p.kills, p.deaths, p.hs, p.att[p.weapon] | 0]);
     }
     const tl = this.intermission ? 0 : Math.max(0, Math.ceil(this.timeLimit - (t - this.matchStart)));
     this.broadcast({ t: 'snap', st: r3(t), tl, ps, ts: this.mode === 'tdm' ? this.teamScore : undefined });
@@ -563,10 +680,11 @@ export class GameCore {
     if (want !== b.weapon) { b.weapon = want; b.switchUntil = t + (want === 'knife' ? 0.25 : 0.5); b.reloadUntil = 0; b.burst = 0; }
     const w = WEAPONS[b.weapon];
     if (!w.melee) {
-      if (b.ammo[b.weapon] == null) b.ammo[b.weapon] = w.mag;
-      if (b.reloadUntil && t >= b.reloadUntil) { b.reloadUntil = 0; b.ammo[b.weapon] = w.mag; }
-      const reloadT = w.shell ? w.shell.start + w.shell.per * (w.mag - b.ammo[b.weapon]) + w.shell.end : w.reload;
-      if (!b.reloadUntil && (b.ammo[b.weapon] <= 0 || (!tg && b.ammo[b.weapon] < w.mag * 0.4))) b.reloadUntil = t + reloadT;
+      const mag = magSize(b.weapon, b.att[b.weapon]);
+      if (b.ammo[b.weapon] == null) b.ammo[b.weapon] = mag;
+      if (b.reloadUntil && t >= b.reloadUntil) { b.reloadUntil = 0; b.ammo[b.weapon] = mag; }
+      const reloadT = w.shell ? w.shell.start + w.shell.per * (mag - b.ammo[b.weapon]) + w.shell.end : w.reload;
+      if (!b.reloadUntil && (b.ammo[b.weapon] <= 0 || (!tg && b.ammo[b.weapon] < mag * 0.4))) b.reloadUntil = t + reloadT;
     }
 
     let mx = 0, mz = 0, speed = 3.3, sprint = false, crouch = false;
@@ -703,21 +821,31 @@ export class GameCore {
         });
       }
       for (const d of this.drops.values()) {
-        const cur = this.slotOf(b, d.w);
-        if (cur && WEAPON_RANK[d.w] <= WEAPON_RANK[cur]) continue;
-        const dd = Math.hypot(d.x - b.x, d.z - b.z);
+        if (d.k === 'weapon') {
+          const cur = this.slotOf(b, d.w);
+          if (cur && WEAPON_RANK[d.w] <= WEAPON_RANK[cur]) continue;
+        } else if (d.k === 'ammo' || !this.wants(b, d) || ((d.k === 'med' || d.k === 'water') && b.hp > 70) || (d.k === 'armor' && b.armor > 50)) continue;
+        const dd = Math.hypot(d.x - b.x, d.z - b.z) * (d.k === 'cash' ? 1.3 : 1);
         if (dd < bd) { bd = dd; best = { k: 'drop', id: d.id, x: d.x, z: d.z }; }
+      }
+      // spend money at a machine: a primary weapon first, then armor
+      const buy = this.botShopping(b);
+      if (buy && (!best || best.k === 'crate' || bd > 4)) {
+        const v = this.map.vendors.reduce((m, v) => (Math.hypot(v.x - b.x, v.z - b.z) < Math.hypot(m.x - b.x, m.z - b.z) ? v : m));
+        if (Math.hypot(v.x - b.x, v.z - b.z) < 32) best = { k: 'vend', id: v.id, x: v.x + v.nx * 0.9, z: v.z + v.nz * 0.9 };
       }
       if (best && (!b.lastSeen || t - b.lastSeen.t > 3)) { b.goal = best; b.path = null; }
     }
     const here = cellIndex(map, b.x, b.z);
     const g = b.goal;
     if (g) {
-      const valid = g.k === 'crate' ? !this.crates[g.id].open : this.drops.has(g.id);
+      const valid = g.k === 'crate' ? !this.crates[g.id].open : g.k === 'vend' ? !!this.botShopping(b) : this.drops.has(g.id);
       const d = Math.hypot(g.x - b.x, g.z - b.z);
       if (!valid) { b.goal = null; b.path = null; }
-      else if (d < 1.25) {
-        if (g.k === 'crate') this.onOpen(b, g.id); else this.onPickup(b, g.id);
+      else if (d < (g.k === 'drop' ? 0.9 : 1.25)) {
+        if (g.k === 'crate') this.onOpen(b, g.id);
+        else if (g.k === 'vend') { this.onBuy(b, { id: this.botShopping(b), v: g.id }); b.lootT = 0.8; }
+        else if (!this.onPickup(b, g.id) && this.time < (this.drops.get(g.id)?.ready ?? 0)) return; // still in the air: wait for it
         b.goal = null; b.path = null;
         return;
       } else if (cellIndex(map, g.x, g.z) === here || (b.path && b.pi >= b.path.length)) {
@@ -744,6 +872,24 @@ export class GameCore {
         b.pitch *= 0.9;
         b.move = [dx / d, dz / d, b.fast ? 5 : 3.3];
       }
+    }
+  }
+
+  // what a bot would buy right now (shop item id) or null
+  botShopping(b) {
+    if (!this.map.vendors.length || this.time - b.vendT < 4) return null; // pick up what was just bought first
+    if (!b.primary && b.cash >= 250) return b.cash >= 270 && Math.random() < 0.5 ? 'm4' : 'rifle';
+    if (b.armor < 40 && b.cash >= 75) return 'armor';
+    if (b.hp < 60 && b.cash >= 60) return 'med';
+    return null;
+  }
+
+  // walk over health, armor, grenades and money to take them
+  botGrab(b) {
+    for (const d of this.drops.values()) {
+      if (d.k === 'weapon' || this.time < d.ready) continue;
+      if (Math.abs(d.x - b.x) > 1 || Math.abs(d.z - b.z) > 1 || Math.hypot(d.x - b.x, d.z - b.z) > 0.9) continue;
+      if (this.wants(b, d) && this.onPickup(b, d.id)) return;
     }
   }
 
@@ -781,10 +927,11 @@ export class GameCore {
     const ty = (tg.crouch ? 0.95 : 1.3) + ey - eye;
     const dx = tg.x - b.x + Math.cos(b.yaw) * ex, dz = tg.z - b.z - Math.sin(b.yaw) * ex;
     const L = Math.hypot(dx, ty, dz) || 1;
-    this.broadcast({ t: 'shot', id: b.id, w: b.weapon, o: [r2(b.x), r2(eye), r2(b.z)], d: [dx / L, ty / L, dz / L].map(r3), ts: r3(ts) });
-    this.noise(b, 30);
+    const att = b.att[b.weapon] | 0;
+    this.broadcast({ t: 'shot', id: b.id, w: b.weapon, o: [r2(b.x), r2(eye), r2(b.z)], d: [dx / L, ty / L, dz / L].map(r3), ts: r3(ts), s: att & ATT.SUP ? 1 : undefined });
+    this.noise(b, shotNoise(att));
     if (dmg > 0 && this.damage(tg, dmg, b, b.weapon, zone)) b.hits++;
   }
 }
 
-function dropMsg(d) { return { id: d.id, w: d.w, x: d.x, z: d.z, yaw: d.yaw }; }
+function dropMsg(d) { return { id: d.id, k: d.k, w: d.w || undefined, v: d.v || undefined, a: d.a || undefined, x: d.x, z: d.z, yaw: d.yaw }; }

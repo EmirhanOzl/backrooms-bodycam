@@ -76,21 +76,3 @@ export function blastDamage(d) {
   const k = 1 - (d - G.inner) / (G.radius - G.inner);
   return G.dmg * Math.pow(k, 1.3);
 }
-
-// Rough weapon preference (bots pick up / keep the better one).
-export const WEAPON_RANK = { pistol: 1, revolver: 2, smg: 3, shotgun: 3, sniper: 3, rifle: 4, m4: 4 };
-
-const LOOT_WEAPONS = [['smg', 22], ['shotgun', 18], ['rifle', 16], ['m4', 16], ['revolver', 16], ['sniper', 9]];
-const LOOT_TOTAL = LOOT_WEAPONS.reduce((s, [, w]) => s + w, 0);
-
-export function rollLoot(R = Math.random) {
-  const r = R();
-  if (r < 0.34) {
-    let x = R() * LOOT_TOTAL;
-    for (const [w, wt] of LOOT_WEAPONS) { if ((x -= wt) < 0) return { k: 'weapon', w }; }
-  }
-  if (r < 0.6) return { k: 'ammo' };
-  if (r < 0.72) return { k: 'nade' };
-  if (r < 0.87) return { k: 'med', v: 50 };
-  return { k: 'armor', v: 50 };
-}

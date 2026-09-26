@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GameCore, EYE_STAND } from '../public/js/shared/core.js';
 import { WEAPONS, GRENADE, blastDamage, meleeDamage } from '../public/js/shared/weapons.js';
+import { SHOP, ATT, BONUS, ECON, magSize } from '../public/js/shared/items.js';
 import { cellCenter } from '../public/js/shared/map.js';
 import { makeNade, stepNade, NADE_STEP } from '../public/js/shared/physics.js';
 
@@ -103,6 +104,10 @@ test('dead players drop their primary; others can pick it up', () => {
   const drop = [...core.drops.values()].find((d) => d.w === 'm4');
   assert.ok(drop, 'm4 dropped');
   core.handle('a', { t: 'pickup', id: drop.id });
+  assert.equal(a.primary, null, 'cannot be caught mid-air');
+  for (let i = 0; i < 20; i++) core.tick(1 / 30);
+  Object.assign(a, { x: drop.x, z: drop.z });
+  core.handle('a', { t: 'pickup', id: drop.id });
   assert.equal(a.primary, 'm4');
   assert.ok(inbox.a.some((m) => m.t === 'got' && m.w === 'm4' && m.slot === 'primary'));
   // swapping the secondary leaves the old one on the floor
@@ -165,4 +170,85 @@ test('blackout levels: most lights off, bots use flashlights', () => {
   assert.ok(normal.map.fixtures.filter((f) => f.state === 1).length / normal.map.fixtures.length < 0.25);
   for (let i = 0; i < 90; i++) core.tick(1 / 30);
   assert.ok([...core.players.values()].some((p) => p.flags & 4), 'some bot has its flashlight on');
+});
+
+test('crate loot pops out onto the floor; weapons wait for the player, consumables are walked over', () => {
+  const { core, a, inbox } = duel(4321);
+  const c = core.map.crates[0];
+  Object.assign(a, { x: c.x + 1, z: c.z, hp: 60 });
+  const origRandom = Math.random;
+  let n = 0;
+  Math.random = () => [0.1, 0.5, 0.0, 0.9, 0.99][n++ % 5]; // weapon roll: smg, no attachment, money, no bonus ammo
+  try { core.handle('a', { t: 'open', id: 0 }); } finally { Math.random = origRandom; }
+  const items = [...core.drops.values()];
+  assert.ok(inbox.a.some((m) => m.t === 'crate' && m.open === 1));
+  const gun = items.find((d) => d.k === 'weapon');
+  assert.ok(gun, 'a weapon fell out');
+  assert.equal(a.primary, null, 'weapons are never equipped straight out of the crate');
+  const drops = inbox.a.filter((m) => m.t === 'drop');
+  assert.ok(drops.length === items.length && drops.every((m) => Array.isArray(m.d.f)), 'clients get the launch point to animate the arc');
+  for (const d of items) assert.ok(Math.hypot(d.x - c.x, d.z - c.z) > 0.45, 'lands outside the crate');
+  for (let i = 0; i < 20; i++) core.tick(1 / 30);
+  Object.assign(a, { x: gun.x, z: gun.z });
+  core.handle('a', { t: 'pickup', id: gun.id });
+  assert.equal(a.primary, gun.w);
+  // health: taken only while hurt
+  const med = core.addItem({ k: 'med', v: 50 }, a.x, a.z);
+  a.hp = 100;
+  core.handle('a', { t: 'pickup', id: med.id });
+  assert.ok(core.drops.has(med.id), 'full health leaves the kit on the floor');
+  a.hp = 70;
+  core.handle('a', { t: 'pickup', id: med.id });
+  assert.equal(a.hp, 100);
+  const cash = core.addItem({ k: 'cash', v: 30 }, a.x, a.z);
+  core.handle('a', { t: 'pickup', id: cash.id });
+  assert.equal(a.cash, 30);
+  assert.ok(inbox.a.some((m) => m.t === 'loot' && m.loot.k === 'cash' && m.cash === 30));
+});
+
+test('kills pay money with style bonuses; dying spills part of it', () => {
+  const { core, a, v, inbox } = duel();
+  v.cash = 200;
+  core.handle('a', { t: 'swing', h: 0 });
+  core.handle('a', { t: 'stab', id: 'v' });
+  assert.equal(v.alive, false);
+  const pay = inbox.a.find((m) => m.t === 'cash');
+  const want = ECON.kill + BONUS.back[1] + BONUS.first[1];
+  assert.equal(pay.add, want, JSON.stringify(pay.lines));
+  assert.equal(a.cash, want);
+  assert.equal(v.cash, 150, 'a quarter of the money is dropped');
+  assert.ok([...core.drops.values()].some((d) => d.k === 'cash' && d.v === 50));
+  const k = inbox.a.find((m) => m.t === 'kill');
+  assert.ok(Array.isArray(k.im) && k.im.every(Number.isFinite), 'kill carries the body launch velocity');
+});
+
+test('vending machine: buying pops the item out, attachments go on the held weapon', () => {
+  const { core, a, inbox } = duel(99);
+  const vm = core.map.vendors[0];
+  assert.ok(core.map.vendors.length >= 2, 'machines are placed');
+  Object.assign(a, { x: vm.x + vm.nx * 1.1, z: vm.z + vm.nz * 1.1, cash: 500, primary: 'm4', weapon: 'm4' });
+  core.handle('a', { t: 'buy', id: 'armor', v: vm.id });
+  assert.equal(a.cash, 500 - SHOP.find((s) => s.id === 'armor').price);
+  const plate = [...core.drops.values()].find((d) => d.k === 'armor');
+  assert.ok(plate, 'plate dispensed');
+  for (let i = 0; i < 12; i++) core.tick(1 / 30);
+  core.handle('a', { t: 'buy', id: 'ext', v: vm.id, w: 'm4' });
+  assert.equal(a.att.m4 & ATT.EXT, ATT.EXT);
+  assert.ok(inbox.a.some((m) => m.t === 'att' && m.w === 'm4'));
+  assert.equal(magSize('m4', a.att.m4), 40);
+  for (let i = 0; i < 12; i++) core.tick(1 / 30);
+  core.handle('a', { t: 'buy', id: 'sup', v: vm.id, w: 'shotgun' });
+  assert.ok(inbox.a.some((m) => m.t === 'nobuy' && m.why === 'fit'), 'cannot fit a weapon you do not own');
+  a.cash = 10;
+  for (let i = 0; i < 12; i++) core.tick(1 / 30);
+  core.handle('a', { t: 'buy', id: 'med', v: vm.id });
+  assert.ok(inbox.a.some((m) => m.t === 'nobuy' && m.why === 'cash'));
+  // too far away
+  Object.assign(a, { x: vm.x + vm.nx * 6, z: vm.z + vm.nz * 6, cash: 500 });
+  for (let i = 0; i < 12; i++) core.tick(1 / 30);
+  assert.equal(core.onBuy(a, { id: 'med', v: vm.id }), false);
+  // suppressed shots are flagged for everyone's audio
+  a.att.m4 |= ATT.SUP; a.lastShot = -9;
+  core.handle('a', { t: 'shoot', w: 'm4', o: [a.x, EYE_STAND, a.z], d: [0, 0, -1], hits: [] });
+  assert.ok(inbox.v.some((m) => m.t === 'shot' && m.s === 1));
 });

@@ -63,5 +63,11 @@ export const TIPS = [
   'Koşmak nefesini tüketir; nefesin biterse bir süre koşamazsın.',
   'Botlar da kutuları açar ve bombalardan kaçar. Bomba uyarısı görürsen sen de kaç.',
   'Ayarlardan bodycam lens efektini azaltabilirsin; baş dönmesi yaşarsan işe yarar.',
+  'Kutudan çıkan her şey yere düşer: silaha bakıp F ile al, sağlık, zırh, mermi ve parayı üzerinden geçerek topla.',
+  'Leş başına $100; kafadan, sırttan bıçak, uzak atış, havada ve çoklu leş ekstra para kazandırır.',
+  'Ölünce paranın dörtte biri yere saçılır — cesedin yanından geçen herkes alabilir.',
+  'Badem suyu otomatlarından silah, zırh ve eklenti alabilirsin: susturucu seni botların kulağından saklar.',
+  'Lazer belden atışı çok toparlar ama kırmızı noktayı herkes görür.',
+  'Susturucu atışları duvar arkasından zor duyulur ve namlu alevi çıkarmaz; biraz menzil kaybettirir.',
 ];
 export const randomTip = () => TIPS[(Math.random() * TIPS.length) | 0];

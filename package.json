@@ -1,6 +1,6 @@
 {
   "name": "backrooms-bodycam",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Backrooms Level 0 bodycam-style tactical FPS: bots, LAN PvP, team deathmatch; runs in the browser or as a desktop app",
   "scripts": {
     "start": "node server.js",

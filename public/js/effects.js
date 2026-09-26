@@ -273,3 +273,43 @@ export class Motes {
     u.uT.value = time; u.uCam.value.copy(cam); u.uFwd.value.copy(fwd); u.uL.value = light; u.uFlash.value = flash ? 1 : 0;
   }
 }
+
+// Laser sights: a faint beam (brighter near the emitter, visible in the dusty air) and a dot where it lands.
+// Filled every frame with begin() / add() / end().
+export class Lasers {
+  constructor(scene, max = 8) {
+    this.max = max;
+    this.pos = new Float32Array(max * 6); this.col = new Float32Array(max * 6);
+    const g = new THREE.BufferGeometry();
+    this.pa = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
+    this.ca = new THREE.BufferAttribute(this.col, 3).setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('position', this.pa); g.setAttribute('color', this.ca);
+    this.lines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    this.lines.frustumCulled = false;
+    const dotMat = new THREE.SpriteMaterial({ map: TX.softDotTexture(), color: new THREE.Color(6, 0.35, 0.25), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false });
+    this.dots = [];
+    for (let i = 0; i < max; i++) { const s = new THREE.Sprite(dotMat); s.visible = false; scene.add(s); this.dots.push(s); }
+    scene.add(this.lines);
+    this.n = 0;
+  }
+  begin() { this.n = 0; }
+  // from: emitter, to: where it lands (null = into the distance), eye: camera position (dot size)
+  add(from, to, eye, beam = 0.35) {
+    if (this.n >= this.max) return;
+    const k = this.n * 6, i = this.n++;
+    this.pos[k] = from.x; this.pos[k + 1] = from.y; this.pos[k + 2] = from.z;
+    this.pos[k + 3] = to.x; this.pos[k + 4] = to.y; this.pos[k + 5] = to.z;
+    this.col[k] = 1.6 * beam; this.col[k + 1] = 0.08 * beam; this.col[k + 2] = 0.05 * beam;
+    this.col[k + 3] = 0.12 * beam; this.col[k + 4] = 0.01 * beam; this.col[k + 5] = 0;
+    const s = this.dots[i];
+    s.visible = true;
+    s.position.copy(to);
+    const d = Math.max(0.3, to.distanceTo(eye));
+    s.scale.setScalar(0.045 + d * 0.007);
+  }
+  end() {
+    for (let i = this.n; i < this.max; i++) this.dots[i].visible = false;
+    this.lines.geometry.setDrawRange(0, this.n * 2);
+    this.pa.needsUpdate = this.ca.needsUpdate = true;
+  }
+}

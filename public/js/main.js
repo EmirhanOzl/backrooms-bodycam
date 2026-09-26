@@ -1,14 +1,15 @@
 // BACKROOMS: BODYCAM — client
 import * as THREE from 'three';
-import { generateMap, CEIL, CRATE_H, raycast, lineOfSight, collide, hitNormal, findPath, cellCenter } from './shared/map.js';
-import { WEAPONS, WEAPON_ORDER, GRENADE, dmgAt, zoneMul } from './shared/weapons.js';
-import { PLAYER_R, EYE_STAND, EYE_CROUCH, HEAD_STAND, HEAD_CROUCH, HEAD_R, BODY_R, MAX_HP, F, RESPAWN_T, PROTECT_T } from './shared/core.js';
+import { generateMap, CEIL, CRATE_H, VENDOR_H, raycast, rayInfo, lineOfSight, collide, hitNormal, findPath, cellCenter } from './shared/map.js';
+import { WEAPONS, WEAPON_ORDER, GRENADE, MAX_NADES, dmgAt, zoneMul } from './shared/weapons.js';
+import { PLAYER_R, EYE_STAND, EYE_CROUCH, HEAD_STAND, HEAD_CROUCH, HEAD_R, BODY_R, MAX_HP, MAX_ARMOR, F, RESPAWN_T, PROTECT_T } from './shared/core.js';
+import { ATT, ATTACHMENTS, SHOP, VENDOR_R, magSize, reloadMul, fitsAtt, itemLabel, SUP_DMG, LASER_SPREAD } from './shared/items.js';
 import { NADE_STEP, makeNade, stepNade, throwVelocity } from './shared/physics.js';
 import { buildWorld, bakeMaterial } from './world.js';
-import { gunMaterials, Soldier, mergedGunGeometry } from './models.js';
+import { gunMaterials, Soldier, mergedGunGeometry, mergedItemGeometry } from './models.js';
 import { Viewmodel, FEEL } from './viewmodel.js';
 import { BodycamPost } from './post.js';
-import { Particles, Decals, Tracers, MuzzleSprites, Shells, Motes } from './effects.js';
+import { Particles, Decals, Tracers, MuzzleSprites, Shells, Motes, Lasers } from './effects.js';
 import * as TX from './textures.js';
 import { Sound } from './audio.js';
 import { Net } from './net.js';
@@ -34,10 +35,14 @@ const SLOT_ACTIONS = { slot1: 'primary', slot2: 'secondary', slot3: 'melee' };
 const SLOT_ORDER = ['primary', 'secondary', 'melee'];
 const SHELL_KIND = { pistol: 'pistol', smg: 'pistol', rifle: 'rifle', m4: 'rifle', sniper: 'rifle', shotgun: 'hull' };
 
-function mkSlot(w, mag, res) {
+function mkSlot(w, mag, res, a = 0) {
   const W = WEAPONS[w];
-  return { w, mag: mag ?? W.mag ?? 0, res: res ?? W.reserve ?? 0, mode: W.modes[0], needsCycle: false };
+  return { w, a, mag: mag ?? (W.melee ? 0 : magSize(w, a)), res: res ?? W.reserve ?? 0, mode: W.modes[0], needsCycle: false };
 }
+const slotMag = (s) => (WEAPONS[s.w].melee ? 1 : magSize(s.w, s.a));
+// how an item lies on the carpet: height of its origin and tilt
+const ITEM_REST = { weapon: [0.03, 0, Math.PI / 2], nade: [0, 0, 0], ammo: [0, 0, 0], med: [0, 0, 0], water: [0, 0, 0], armor: [0, 0, 0], cash: [0, 0, 0] };
+const LAND_SOUND = { weapon: 'it_gun', ammo: 'it_box', med: 'it_soft', water: 'it_bottle', armor: 'it_soft', nade: 'gr_bounce', cash: 'it_cash' };
 
 // ray vs crate box (axis-aligned approximation of the rotated crate); returns t or Infinity, sets rayCrate.ax
 function rayCrate(o, d, cx, cz, tmax) {
@@ -93,6 +98,7 @@ class Game {
     this.vmMuzzle = new MuzzleSprites(this.vmScene, 3);
     this.shells = new Shells(this.vmScene);
     this.motes = new Motes(this.scene);
+    this.lasers = new Lasers(this.scene, 8);
     this.sound = new Sound();
     this.hud = new Hud();
     this.M = gunMaterials();
@@ -111,6 +117,7 @@ class Game {
     this.remotes = new Map();
     this.names = new Map();
     this.drops = new Map();
+    this.corpses = [];
     this.nades = new Map();
     this.events = [];
     this.predHits = new Map();
@@ -137,7 +144,7 @@ class Game {
       swayX: 0, swayY: 0, deathT: 0, deathAt: 0, deathYaw: 0, killerPos: null, hurt: 0, beatT: 0, breathT: 0,
       lean: 0, leanOff: 0, shotIdx: 0, lastShotT: -9, land: 0, inertX: 0, inertZ: 0, block: 0,
       stamina: 1, exhausted: false, stamRegen: 0, breath: 1, holdBreath: false, fovPunch: 0,
-      nadeHeld: false, cookT: 0, cooking: false, protectUntil: 0,
+      nadeHeld: false, cookT: 0, cooking: false, protectUntil: 0, cash: 0,
     };
   }
   cur() { return this.me.inv[this.me.slot]; }
@@ -263,6 +270,8 @@ class Game {
     welcome.crates.forEach((o, i) => this.world.setCrateOpen(i, !!o, true));
     for (const d of welcome.drops) this.addDrop(d);
     this.me = this.newMe();
+    this.me.cash = welcome.cash || 0;
+    this.hud.cash(this.me.cash);
     this.setWeapon('secondary', true);
     this.hud.endScreen(null);
     this.hud.banner('');
@@ -294,8 +303,9 @@ class Game {
     this.net = null;
     for (const r of this.remotes.values()) this.scene.remove(r.model.root);
     this.remotes.clear(); this.names.clear(); this.events.length = 0;
+    this.clearCorpses();
     for (const L of this.remoteFlash) L.intensity = 0;
-    this.clearDrops(); this.clearNades();
+    this.clearDrops(); this.clearNades(); this.closeShop();
     this.me = this.newMe();
     this.particles.clear(); this.fire.clear(); this.tracers.clear();
     $('score').classList.add('hidden');
@@ -309,8 +319,10 @@ class Game {
       this.world.group.traverse((o) => {
         if (!o.isMesh) return;
         o.geometry.dispose();
-        for (const k of ['map', 'bumpMap', 'lightMap']) o.material[k]?.dispose();
-        o.material.dispose();
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+          for (const k of ['map', 'bumpMap', 'lightMap']) m[k]?.dispose();
+          m.dispose();
+        }
       });
     }
     this.map = generateMap(seed, size, light);
@@ -320,8 +332,8 @@ class Game {
     this.serial = 'X' + (seed >>> 0).toString(16).toUpperCase().padStart(8, '0').slice(0, 8);
     this.hud.clock(this.serial);
     this.decals.clear(); this.blood.clear(); this.scorch.clear();
-    this.clearDrops(); this.clearNades();
-    this.nearCrate = -1; this.nearDrop = null;
+    this.clearDrops(); this.clearNades(); this.closeShop(); this.clearCorpses();
+    this.nearCrate = -1; this.nearDrop = null; this.nearVendor = null;
     for (const r of this.remotes.values()) { r.buf.length = 0; }
   }
 
@@ -396,6 +408,7 @@ class Game {
     });
     document.addEventListener('mousedown', (e) => {
       if (!this.locked) return;
+      if (this.shop) { if (e.button === 0) this.buySelected(); else if (e.button === 2) this.closeShop(); return; }
       if (e.button === 0) { this.mouse.l = true; this.fresh.l = true; }
       if (e.button === 2) { this.mouse.r = true; this.fresh.r = true; this.me.adsToggle = !this.me.adsToggle; }
     });
@@ -403,6 +416,7 @@ class Game {
     document.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('wheel', (e) => {
       if (!this.locked || this.state !== 'game') return;
+      if (this.shop) { this.shopMove(e.deltaY > 0 ? 1 : -1); return; }
       const me = this.me, owned = SLOT_ORDER.filter((s) => me.inv[s]);
       const i = owned.indexOf(me.pendingSlot || me.slot);
       this.equip(owned[(i + (e.deltaY > 0 ? 1 : -1) + owned.length) % owned.length]);
@@ -415,6 +429,7 @@ class Game {
       if (!this.locked) return;
       if (e.code === 'Space' || e.code.startsWith('Arrow') || e.ctrlKey || e.altKey) e.preventDefault();
       if (e.repeat) return;
+      if (this.shop && this.shopKey(e.code, this.actionOf(e.code))) return;
       this.keys[e.code] = true;
       const me = this.me;
       if (!settings.holdCrouch && act === 'crouch') me.crouchToggle = !me.crouchToggle;
@@ -448,6 +463,7 @@ class Game {
     const el = $('pause'), was = !el.classList.contains('hidden');
     el.classList.toggle('hidden', !paused);
     if (paused && (!was || reset)) this.showPauseMain();
+    if (paused) this.closeShop();
     this.net?.setPaused(paused);
   }
   fireHeld() { return this.mouse.l || this.padFire; }
@@ -481,7 +497,16 @@ class Game {
     if (P.pressed(BTN.L3)) me.padSprint = !me.padSprint;
     this.padLean = (P.down[BTN.RIGHT] ? 1 : 0) - (P.down[BTN.LEFT] ? 1 : 0);
     if (!me.alive) return;
-    if (P.pressed(BTN.X)) { if (this.nearDrop || this.nearCrate >= 0) this.interact(); else this.startReload(); }
+    if (this.shop) {
+      this.padJump = false;
+      if (P.pressed(BTN.B)) me.padCrouch = !me.padCrouch;
+      if (P.pressed(BTN.UP)) this.shopMove(-1);
+      if (P.pressed(BTN.DOWN)) this.shopMove(1);
+      if (P.pressed(BTN.A)) this.buySelected();
+      if (P.pressed(BTN.B) || P.pressed(BTN.X)) this.closeShop();
+      return;
+    }
+    if (P.pressed(BTN.X)) { if (this.nearDrop || this.nearCrate >= 0 || this.nearVendor) this.interact(); else this.startReload(); }
     if (P.pressed(BTN.Y)) this.equip(me.slot === 'primary' || !me.inv.primary ? 'secondary' : 'primary');
     if (P.pressed(BTN.LB)) this.equip(me.slot === 'melee' ? (me.inv.primary ? 'primary' : 'secondary') : 'melee');
     if (P.pressed(BTN.RB)) this.nadePress();
@@ -501,6 +526,7 @@ class Game {
     me.slot = slot; me.pendingSlot = null;
     me.reloading = false; me.cycling = false; me.burst = 0; me.slideBack = false;
     const type = this.curType();
+    this.vm.setAttachments(type, this.cur().a);
     this.vm.setWeapon(type);
     me.slideBack = type === 'pistol' && this.cur().mag === 0;
     if (!instant) this.vm.play('draw', WEAPONS[type].draw);
@@ -521,16 +547,17 @@ class Game {
   startReload() {
     const me = this.me, s = this.cur(), w = WEAPONS[s.w];
     if (!me.alive || w.melee || me.reloading || !this.canAct() || s.res <= 0) return;
-    const cap = w.mag + (w.chamber && s.mag > 0 ? 1 : 0);
+    const cap = slotMag(s) + (w.chamber && s.mag > 0 ? 1 : 0);
     if (s.mag >= cap) return;
     if (this.vm.animName === 'inspect') this.vm.stop();
     me.reloading = true; me.burst = 0; me.wantFire = false;
+    const mul = reloadMul(s.a);
     if (w.shell) { if (s.mag === 0) s.needsCycle = true; this.vm.play('sg_start', w.shell.start); }
     else if (w.cls === 'revolver') this.vm.play('revolver', w.reload);
     else {
       const empty = s.mag === 0;
       if (empty && w.cls === 'bolt') s.needsCycle = true;
-      this.vm.play('reload', empty ? w.reloadEmpty : w.reload, { empty: empty && w.cls !== 'bolt' });
+      this.vm.play('reload', (empty ? w.reloadEmpty : w.reload) * mul, { empty: empty && w.cls !== 'bolt' });
     }
   }
   cycleMode() {
@@ -568,10 +595,83 @@ class Game {
 
   interact() {
     const me = this.me;
-    if (!me.alive || this.time - (this.lastUse || 0) < 0.3) return;
+    if (!me.alive) return;
+    if (this.shop) { this.closeShop(); return; }
+    if (this.time - (this.lastUse || 0) < 0.3) return;
     this.lastUse = this.time;
-    if (this.nearDrop) { this.net.send({ t: 'pickup', id: this.nearDrop.id }); return; }
-    if (this.nearCrate >= 0) this.net.send({ t: 'open', id: this.nearCrate });
+    const d = this.nearDrop;
+    if (d) {
+      if (d.k !== 'weapon' && !this.useful(d)) { this.hud.toast(this.fullText(d), 'bad'); this.sound.ui('ui_nope', 0.4); return; }
+      this.net.send({ t: 'pickup', id: d.id });
+      return;
+    }
+    if (this.nearCrate >= 0) { this.net.send({ t: 'open', id: this.nearCrate }); return; }
+    if (this.nearVendor) this.openShop(this.nearVendor);
+  }
+  // would a consumable do anything for us right now?
+  useful(d) {
+    const me = this.me;
+    switch (d.k) {
+      case 'ammo': return ['primary', 'secondary'].some((k) => me.inv[k] && me.inv[k].res < WEAPONS[me.inv[k].w].maxReserve);
+      case 'nade': return me.inv.nades < MAX_NADES;
+      case 'med': case 'water': return me.hp < MAX_HP;
+      case 'armor': return me.armor < MAX_ARMOR;
+      default: return true;
+    }
+  }
+  fullText(d) { return { ammo: 'MERMİN DOLU', nade: 'EN FAZLA 2 EL BOMBASI', med: 'SAĞLIĞIN DOLU', water: 'SAĞLIĞIN DOLU', armor: 'ZIRHIN DOLU' }[d.k] || ''; }
+
+  // ------------------------------------------------------------------ vending machine
+  openShop(v) {
+    this.shop = { v, sel: this.shop?.sel ?? 0 };
+    this.me.adsToggle = false; this.mouse.l = false;
+    this.sound.ui('ui_click', 0.4);
+    this.renderShop();
+  }
+  closeShop() {
+    if (!this.shop) return;
+    this.shop = null;
+    this.hud.shop(null);
+  }
+  shopMove(dir) {
+    if (!this.shop) return;
+    this.shop.sel = (this.shop.sel + dir + SHOP.length) % SHOP.length;
+    this.sound.ui('ui_hover', 0.3);
+    this.renderShop();
+  }
+  shopKey(code, act) {
+    if (code === 'ArrowUp') { this.shopMove(-1); return true; }
+    if (code === 'ArrowDown') { this.shopMove(1); return true; }
+    if (code === 'Enter' || code === 'NumpadEnter') { this.buySelected(); return true; }
+    const n = /^(Digit|Numpad)(\d)$/.exec(code);
+    if (n) { const i = (+n[2] + 9) % 10; if (i < SHOP.length) { this.shop.sel = i; this.buySelected(); } return true; }
+    if (act === 'use' || code === 'Backspace') { this.closeShop(); return true; }
+    return false;
+  }
+  // why an item can't be bought right now ('' = it can)
+  shopBlock(it) {
+    const me = this.me;
+    if (me.cash < it.price) return 'PARA YETMİYOR';
+    if (it.k === 'att') {
+      const s = this.cur();
+      if (WEAPONS[s.w].melee) return 'ELİNDE SİLAH YOK';
+      if (!fitsAtt(s.w, it.a)) return `${WEAPONS[s.w].short} İÇİN YOK`;
+      if ((s.a | 0) & it.a) return 'ZATEN TAKILI';
+    }
+    if (it.k === 'weapon') { const held = me.inv[WEAPONS[it.w].slot]; if (held && held.w === it.w) return 'ZATEN SENDE'; }
+    return '';
+  }
+  buySelected() {
+    if (!this.shop) return;
+    const it = SHOP[this.shop.sel], why = this.shopBlock(it);
+    if (why) { this.hud.toast(why, 'bad'); this.sound.ui('ui_nope', 0.4); return; }
+    if (this.time - (this.lastBuy || 0) < 0.3) return;
+    this.lastBuy = this.time;
+    this.net.send({ t: 'buy', id: it.id, v: this.shop.v.id, w: this.curType() });
+  }
+  renderShop() {
+    if (!this.shop) return;
+    this.hud.shop({ items: SHOP.map((it) => ({ ...it, why: this.shopBlock(it) })), sel: this.shop.sel, cash: this.me.cash, weapon: WEAPONS[this.curType()].short, pad: this.pad.active && !this.locked });
   }
 
   onVmEvent(e, anim) {
@@ -583,9 +683,9 @@ class Game {
         else this.sound.mech(w.slot === 'primary' ? 'deploy_heavy' : 'deploy_light', 0.5);
         return;
       case 'ammo':
-        if (anim === 'sg_insert') { if (s.res > 0 && s.mag < w.mag) { s.mag++; s.res--; } return; }
+        if (anim === 'sg_insert') { if (s.res > 0 && s.mag < slotMag(s)) { s.mag++; s.res--; } return; }
         {
-          const cap = w.mag + (w.chamber && s.mag > 0 ? 1 : 0), take = Math.min(cap - s.mag, s.res);
+          const cap = slotMag(s) + (w.chamber && s.mag > 0 ? 1 : 0), take = Math.min(cap - s.mag, s.res);
           s.mag += take; s.res -= take;
           me.slideBack = false;
         }
@@ -617,7 +717,7 @@ class Game {
         if (s.needsCycle && s.mag > 0) { me.cycling = true; this.vm.play('bolt', w.cycle); }
         return;
       case 'sg_start': case 'sg_insert':
-        if (s.mag < w.mag && s.res > 0 && !(me.wantFire && s.mag > 0)) this.vm.play('sg_insert', w.shell.per);
+        if (s.mag < slotMag(s) && s.res > 0 && !(me.wantFire && s.mag > 0)) this.vm.play('sg_insert', w.shell.per);
         else this.vm.play('sg_end', w.shell.end);
         return;
       case 'sg_end':
@@ -675,7 +775,7 @@ class Game {
         this.tl = m.tl; this.tlAt = this.time;
         if (m.ts) this.teamScore = m.ts;
         for (const s of m.ps) {
-          const [id, x, y, z, yaw, pitch, f, w, hp, ar, k, d, hs] = s;
+          const [id, x, y, z, yaw, pitch, f, w, hp, ar, k, d, hs, att] = s;
           if (id === this.myId) {
             me.kills = k; me.deaths = d; me.hs = hs;
             if (me.alive) { me.hp = hp; me.armor = ar; }
@@ -683,7 +783,7 @@ class Game {
           }
           const r = this.remotes.get(id);
           if (!r) continue;
-          r.kills = k; r.deaths = d; r.hs = hs; r.ar = ar;
+          r.kills = k; r.deaths = d; r.hs = hs; r.ar = ar; r.att = att | 0;
           if (r.buf.length && hp < r.buf[r.buf.length - 1].hp && f & F.ALIVE) r.model.flinch(Math.min(1, (r.buf[r.buf.length - 1].hp - hp) / 40));
           r.buf.push({ t: m.st, x, y, z, yaw, pitch, f, w, hp });
           if (r.buf.length > 40) r.buf.shift();
@@ -695,6 +795,8 @@ class Game {
         me.yaw = m.yaw; me.pitch = 0; me.alive = true; me.hp = MAX_HP; me.armor = 0; me.deathT = 0; me.hurt = 0;
         me.kickP = me.kickY = 0; me.stamina = 1; me.exhausted = false; me.breath = 1; me.ads = 0; me.adsToggle = false; me.streak = 0;
         me.protectUntil = this.time + PROTECT_T; me.nadeHeld = false; me.cooking = false;
+        if (m.cash != null) { me.cash = m.cash; this.hud.cash(me.cash); }
+        this.closeShop(); me.dp = null;
         me.inv = { primary: m.inv?.p ? mkSlot(m.inv.p) : null, secondary: mkSlot(m.inv?.s || 'pistol'), melee: mkSlot('knife'), nades: m.inv?.n ?? 1 };
         this.vm.stop();
         this.setWeapon(me.inv.primary ? 'primary' : 'secondary');
@@ -748,16 +850,53 @@ class Game {
       }
       case 'loot': this.applyLoot(m); return;
       case 'got': {
-        const W = WEAPONS[m.w];
+        const W = WEAPONS[m.w], a = m.a | 0;
         this.sound.ui('ui_pickup', 0.6);
         if (m.ammo) {
           const s = me.inv[m.slot];
-          if (s) { s.res = Math.min(W.maxReserve, s.res + W.mag); this.hud.toast(`+${W.mag} ${W.short} MERMİSİ`); }
+          if (s) {
+            s.res = Math.min(W.maxReserve, s.res + W.mag);
+            this.hud.toast(`+${W.mag} ${W.short} MERMİSİ`);
+            if (a !== (s.a | 0)) { s.a = a; if (me.slot === m.slot) this.vm.setAttachments(s.w, a); }
+          }
           return;
         }
-        me.inv[m.slot] = mkSlot(m.w, W.mag, W.mag);
-        this.hud.toast(`+ ${W.label}`);
+        me.inv[m.slot] = mkSlot(m.w, magSize(m.w, a), W.mag, a);
+        this.hud.toast(`+ ${W.label}${a ? ' · ' + ATTACHMENTS.filter((x) => a & x.bit).map((x) => x.label).join(' · ') : ''}`);
         if (me.slot === m.slot) { this.vm.stop(); this.setWeapon(m.slot); } else this.equip(m.slot);
+        return;
+      }
+      case 'cash': {
+        me.cash = m.cash;
+        this.hud.cash(me.cash, m.add);
+        if (m.lines) { this.hud.payout(m.lines, m.add); this.sound.ui('ui_cash', 0.55, this.sound.now() + 0.18); }
+        this.renderShop();
+        return;
+      }
+      case 'att': {
+        me.cash = m.cash; this.hud.cash(me.cash);
+        for (const k of ['primary', 'secondary']) {
+          const s = me.inv[k];
+          if (!s || s.w !== m.w) continue;
+          s.a = m.a;
+          if (me.slot === k) this.vm.setAttachments(s.w, s.a);
+        }
+        const A = ATTACHMENTS.filter((x) => m.a & x.bit).map((x) => x.label);
+        this.hud.toast(`${WEAPONS[m.w].short}: ${A.join(' · ')}`, 'kill');
+        this.sound.mech('att_on', 0.6);
+        if (!this.vm.animName && me.ads < 0.2) this.vm.play('inspect', 2.3);
+        this.renderShop();
+        return;
+      }
+      case 'nobuy':
+        this.hud.toast(m.why === 'cash' ? 'PARA YETMİYOR' : m.why === 'has' ? 'ZATEN TAKILI' : 'BU SİLAHA UYMUYOR', 'bad');
+        this.sound.ui('ui_nope', 0.4);
+        return;
+      case 'vend': {
+        const v = this.map.vendors[m.v];
+        if (!v) return;
+        const p = this.v1.set(v.x + v.nx * 0.4, 0.5, v.z + v.nz * 0.4);
+        this.sound.play('vend', { cat: 'misc', pos: p, vol: m.by === this.myId ? 0.8 : 0.6, ref: 2, occl: this.occluded(p) });
         return;
       }
       case 'drop': this.addDrop(m.d); return;
@@ -784,24 +923,20 @@ class Game {
 
   applyLoot(m) {
     const me = this.me, L = m.loot;
+    if (m.cash != null) { const add = m.cash - me.cash; me.cash = m.cash; this.hud.cash(me.cash, add > 0 ? add : 0); }
+    if (L.k === 'cash') { this.sound.ui('ui_cash', 0.45); this.hud.toast(`+$${L.v}`, 'cash'); this.renderShop(); return; }
     this.sound.ui('ui_pickup', 0.55);
-    if (L.k === 'weapon') {
-      const W = WEAPONS[L.w];
-      me.inv[L.slot] = mkSlot(L.w);
-      this.hud.toast(`+ ${W.label}`);
-      if (me.slot === L.slot) { this.vm.stop(); this.setWeapon(L.slot); } else this.equip(L.slot);
-    } else if (L.k === 'floor') {
-      this.hud.toast(`${WEAPONS[L.w].label} yere bırakıldı — [${keyLabel(settings.binds.use)}] ile değiştir`);
-    } else if (L.k === 'ammo') {
+    if (L.k === 'ammo') {
       const owned = ['primary', 'secondary'].filter((s) => me.inv[s]);
       owned.sort((a, b) => me.inv[a].res / WEAPONS[me.inv[a].w].maxReserve - me.inv[b].res / WEAPONS[me.inv[b].w].maxReserve);
       const curOk = me.slot !== 'melee' && me.inv[me.slot].res < WEAPONS[me.inv[me.slot].w].maxReserve * 0.6;
-      const s = me.inv[curOk ? me.slot : owned[0]], W = WEAPONS[s.w], add = Math.ceil(W.mag * 1.5);
+      const s = me.inv[curOk ? me.slot : owned[0]], W = WEAPONS[s.w], add = Math.ceil(slotMag(s) * 1.5);
       s.res = Math.min(W.maxReserve, s.res + add);
       this.hud.toast(`+${add} ${W.short} MERMİSİ`);
     } else if (L.k === 'nade') { me.inv.nades = L.n; this.hud.toast(`+ ${GRENADE.label}`); }
-    else if (L.k === 'med') { me.hp = m.hp; this.hud.toast('+50 SAĞLIK · İLK YARDIM'); }
-    else if (L.k === 'armor') { me.armor = m.armor; this.hud.toast('+50 ZIRH · PLAKA'); }
+    else if (L.k === 'med') { me.hp = m.hp; this.hud.toast(`+${L.v} SAĞLIK · İLK YARDIM`); }
+    else if (L.k === 'water') { me.hp = m.hp; this.hud.toast(`+${L.v} SAĞLIK · BADEM SUYU`); this.sound.play('it_bottle', { cat: 'ui', vol: 0.3 }); }
+    else if (L.k === 'armor') { me.armor = m.armor; this.hud.toast(`+${L.v} ZIRH · PLAKA`); }
   }
 
   onHurt(m) {
@@ -832,6 +967,9 @@ class Game {
       me.alive = false; me.deathAt = this.time; me.hp = 0; me.ads = 0; me.nadeHeld = false; me.cooking = false; me.reloading = false;
       me.deathYaw = me.yaw;
       me.killerPos = m.k !== m.v ? m.kp : null;
+      // the body camera goes where the body goes
+      const im = m.im || [0, 0, 0];
+      me.dp = { x: me.pos.x, y: me.pos.y + lerp(EYE_STAND, EYE_CROUCH, me.crouchK), z: me.pos.z, vx: im[0] * 0.8, vy: im[1] * 0.6, vz: im[2] * 0.8, spin: Math.hypot(im[0], im[2]) * 0.25 };
       this.vm.stop();
       const dist = m.kp ? Math.round(Math.hypot(m.kp[0] - me.pos.x, m.kp[1] - me.pos.z)) : 0;
       const wl = m.w === 'nade' ? GRENADE.label : WEAPONS[m.w]?.label || m.w;
@@ -840,14 +978,7 @@ class Game {
       this.sound.ui('death', 0.7);
     } else {
       const r = this.remotes.get(m.v);
-      if (r && m.kp) {
-        // fall away from the killer (model-local direction)
-        const dx = r.x - m.kp[0], dz = r.z - m.kp[1], L = Math.hypot(dx, dz) || 1, c = Math.cos(r.yaw), s = Math.sin(r.yaw);
-        const lx = (dx / L) * c - (dz / L) * s, lz = (dx / L) * s + (dz / L) * c;
-        r.model.die(Math.atan2(lx, lz), zone === 'h');
-        // blood pool where the body lands
-        this.blood.add(this.v1.set(r.x + (dx / L) * 0.7, 0.003, r.z + (dz / L) * 0.7), this.v2.set(0, 1, 0), 0.7 + Math.random() * 0.4);
-      }
+      if (r) this.spawnCorpse(r, m);
     }
     if (m.v === this.myId) recordDeath();
     if (m.k === this.myId && m.v !== this.myId) {
@@ -859,19 +990,142 @@ class Game {
     }
   }
 
+  // ------------------------------------------------------------------ bodies
+  // The victim's model stays behind as a body thrown by the killing blow; the player gets a fresh model.
+  spawnCorpse(r, m) {
+    const old = r.model, n = this.names.get(r.id);
+    r.model = new Soldier(n?.color || '#333', 'pistol');
+    r.model.root.visible = false;
+    r.model.setFriendly(this.isFriend(r.id));
+    this.scene.add(r.model.root);
+    r.hideUntil = this.serverNow() + 0.05; // interpolation still shows it alive for a moment
+    let [vx, vy, vz] = m.im || [0, 0, 0];
+    if (!m.im && m.kp) { const dx = r.x - m.kp[0], dz = r.z - m.kp[1], L = Math.hypot(dx, dz) || 1; vx = (dx / L) * 1.5; vz = (dz / L) * 1.5; vy = 0.3; }
+    const hs = Math.hypot(vx, vz), ux = hs > 0.01 ? vx / hs : Math.sin(r.yaw), uz = hs > 0.01 ? vz / hs : Math.cos(r.yaw);
+    const c = Math.cos(r.yaw), s = Math.sin(r.yaw);
+    const body = {
+      model: old, x: r.x, y: r.y + 0.95, z: r.z, yaw: r.yaw, dir: Math.atan2(ux * c - uz * s, ux * s + uz * c),
+      th: 0.02, w: Math.min(5.5, 0.7 + hs * 0.7 + vy * 0.2 + (m.z === 'h' ? 0.8 : 0)), vx, vy, vz, air: 0, t: 0, head: m.z === 'h',
+      seed: Math.random() * 6, twist: (Math.random() - 0.5) * 0.7, fade: 0, landed: false, still: false,
+    };
+    old.root.visible = true;
+    this.corpses.push(body);
+    const alive = this.corpses.filter((b) => !b.fade);
+    if (alive.length > 8) alive[0].fade = 0.001;
+  }
+  updateCorpses(dt) {
+    const cp = this.camera.position;
+    for (const b of this.corpses) {
+      if (b.fade) {
+        b.fade += dt;
+        b.model.root.position.y -= dt * 0.35;
+        if (b.fade > 1.3) b.dead = true;
+        continue;
+      }
+      if (b.still) continue;
+      b.t += dt;
+      const up = Math.abs(Math.cos(b.th)), h = 0.17 + 0.78 * up;
+      b.vy -= 9.8 * dt;
+      const p = { x: b.x + b.vx * dt, z: b.z + b.vz * dt };
+      collide(this.map, p, 0.26);
+      // bounce off walls
+      const px = p.x - (b.x + b.vx * dt), pz = p.z - (b.z + b.vz * dt), pl = Math.hypot(px, pz);
+      if (pl > 1e-4) { const nx = px / pl, nz = pz / pl, vn = b.vx * nx + b.vz * nz; if (vn < 0) { b.vx -= 1.35 * vn * nx; b.vz -= 1.35 * vn * nz; b.w *= 0.7; } }
+      b.x = p.x; b.z = p.z; b.y += b.vy * dt;
+      const ground = b.y <= h;
+      if (ground) {
+        if (b.vy < -2.2) {
+          if (Math.hypot(b.x - cp.x, b.z - cp.z) < 30) this.sound.play('st_land', { cat: 'imp', pos: this.v1.set(b.x, 0.2, b.z), vol: Math.min(0.9, -b.vy * 0.12), ref: 2, occl: this.occluded(this.v1) });
+          b.w *= 0.4; // the impact kills most of the spin
+        }
+        b.y = h;
+        if (b.vy < 0) { b.vy = -b.vy * 0.18; if (b.vy < 0.5) b.vy = 0; }
+        const f = Math.exp(-(up < 0.3 ? 5 : 2) * dt); b.vx *= f; b.vz *= f;
+      }
+      b.air = damp(b.air, ground ? 0 : 1, 7, dt);
+      // topple on the feet, spin freely in the air, settle flat (on the back or the front) on the carpet
+      if (ground && up < 0.3) {
+        const tgt = Math.round((b.th - Math.PI / 2) / Math.PI) * Math.PI + Math.PI / 2;
+        b.w *= Math.exp(-14 * dt);
+        b.th += (tgt - b.th) * Math.min(1, dt * 10);
+        if (!b.landed) {
+          b.landed = true;
+          const q = this.v1.set(b.x, 0.2, b.z);
+          if (q.distanceTo(cp) < 30) this.sound.play('st_land', { cat: 'imp', pos: q, vol: 0.6, ref: 2, occl: this.occluded(q) });
+          this.particles.dust(q, this.v2.set(0, 1, 0), clamp(this.world.sampleLight(b.x, b.z), 0.2, 1.1), 'floor');
+          this.blood.add(this.v3.set(b.x, 0.003, b.z), this.v2.set(0, 1, 0), 0.7 + Math.random() * 0.4);
+        }
+      } else if (ground) {
+        // topple over whichever end touches the carpet (feet or head), never balance on it
+        const sn = Math.sin(b.th), fall = sn * Math.sign(Math.cos(b.th));
+        b.w = b.w * Math.exp(-1.5 * dt) + (11 * fall + (Math.abs(sn) < 0.2 ? Math.sign(b.w || 1) * 3 : 0)) * dt;
+      }
+      b.th += b.w * dt;
+      if (b.landed && ground && Math.hypot(b.vx, b.vz) < 0.03 && b.air < 0.02 && b.t > 1.5) b.still = true;
+      b.model.ragdoll(dt, b, this.world.sampleLight(b.x, b.z) * 0.95 + 0.03);
+    }
+    if (this.corpses.some((b) => b.dead)) {
+      for (const b of this.corpses) if (b.dead) { this.scene.remove(b.model.root); b.model.mat.dispose(); }
+      this.corpses = this.corpses.filter((b) => !b.dead);
+    }
+  }
+  clearCorpses() {
+    for (const b of this.corpses) { this.scene.remove(b.model.root); b.model.mat.dispose(); }
+    this.corpses = [];
+  }
+
   // ------------------------------------------------------------------ world items
+  // items on the carpet; ones thrown out of a crate / body / machine fly there first (d.f = launch point)
   addDrop(d) {
     if (this.drops.has(d.id)) return;
-    const { geo } = mergedGunGeometry(d.w);
+    d.k ||= 'weapon';
+    const geo = d.k === 'weapon' ? mergedGunGeometry(d.w, d.a | 0).geo : mergedItemGeometry(d.k, d.v);
     const mat = bakeMaterial({ vertexColors: true, color: 0xffffff, shininess: 30, specular: 0x333333 }, { uniform: true, phong: true });
-    const L = this.world.sampleLight(d.x, d.z) * 0.95 + 0.04;
-    mat.userData.uLight.value.setRGB(L, L * 0.96, L * 0.85);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.rotation.order = 'YXZ';
-    mesh.rotation.set(0, d.yaw, Math.PI / 2);
-    mesh.position.set(d.x, WEAPONS[d.w].slot === 'primary' ? 0.03 : 0.022, d.z);
+    const rest = ITEM_REST[d.k] || ITEM_REST.ammo;
+    const e = { ...d, mesh, baseL: this.world.sampleLight(d.x, d.z) * 0.95 + 0.04, restY: d.k === 'weapon' ? (WEAPONS[d.w].slot === 'primary' ? 0.03 : 0.022) : rest[0], rest };
+    if (d.f) {
+      const from = new THREE.Vector3(d.f[0], d.f[1], d.f[2]), dist = Math.hypot(d.x - from.x, d.z - from.z);
+      e.fly = { from, t: 0, T: 0.48 + dist * 0.1, h: 0.28 + dist * 0.22, sx: (Math.random() < 0.5 ? -1 : 1) * (1 + ((Math.random() * 2) | 0)), sz: Math.random() < 0.5 ? -1 : 1, bounce: 0 };
+      mesh.position.copy(from);
+    } else mesh.position.set(d.x, e.restY, d.z);
+    mesh.rotation.set(rest[1], d.yaw, rest[2]);
     this.scene.add(mesh);
-    this.drops.set(d.id, { ...d, mesh });
+    this.drops.set(d.id, e);
+    this.setItemLight(e, 0);
+  }
+  setItemLight(e, boost) {
+    const L = Math.max(0.12, e.baseL) * (1 + boost);
+    e.mesh.material.userData.uLight.value.setRGB(L, L * 0.96, L * 0.85);
+  }
+  updateDrops(dt) {
+    const cp = this.camera.position;
+    for (const d of this.drops.values()) {
+      const m = d.mesh, f = d.fly;
+      if (f) {
+        f.t += dt;
+        const u = Math.min(1, f.t / f.T), e = u;
+        m.position.set(lerp(f.from.x, d.x, e), lerp(f.from.y, d.restY, u) + Math.sin(Math.PI * u) * f.h, lerp(f.from.z, d.z, e));
+        // tumble, ending exactly in the resting pose
+        const spin = (1 - u) * (1 - u);
+        m.rotation.set(d.rest[1] + spin * Math.PI * 2 * f.sx, d.yaw + spin * 1.5 * f.sz, d.rest[2] + spin * Math.PI * f.sz);
+        if (u >= 1) {
+          d.fly = null; d.hop = 0.16;
+          const p = this.v1.set(d.x, 0.05, d.z);
+          if (p.distanceTo(cp) < 30) this.sound.play(LAND_SOUND[d.k] || 'it_soft', { cat: 'imp', pos: p, vol: 0.55, ref: 1.6, occl: this.occluded(p) });
+          this.particles.dust(p, this.v2.set(0, 1, 0), clamp(d.baseL, 0.2, 1.1), 'floor');
+        }
+      } else if (d.hop > 0) {
+        d.hop = Math.max(0, d.hop - dt);
+        const k = d.hop / 0.16;
+        m.position.y = d.restY + Math.sin(Math.PI * (1 - k)) * 0.035 * k;
+      }
+      // a soft glint so loot reads on the carpet; stronger on the one being looked at
+      const dist = Math.hypot(d.x - cp.x, d.z - cp.z);
+      const pulse = dist < 10 ? 0.22 * (0.5 + 0.5 * Math.sin(this.time * 3.2 + d.id)) : 0;
+      this.setItemLight(d, d === this.nearDrop ? 0.7 : pulse);
+    }
   }
   removeDrop(id) {
     const d = this.drops.get(id);
@@ -939,8 +1193,13 @@ class Game {
     res.t = maxD; res.kind = null; res.id = null; res.zone = null; res.n.set(0, 1, 0);
     const hl = Math.hypot(d.x, d.z);
     if (hl > 1e-5) {
-      const t2 = raycast(this.map, o.x, o.z, d.x / hl, d.z / hl, maxD * hl);
-      if (t2 / hl < res.t) { res.t = t2 / hl; res.kind = 'wall'; res.n.set(hitNormal[0], 0, hitNormal[1]); }
+      let t2 = raycast(this.map, o.x, o.z, d.x / hl, d.z / hl, maxD * hl), kind = 'wall';
+      const b = rayInfo.box >= 0 ? this.map.boxes[rayInfo.box] : null;
+      if (b && b.kind === 3) {
+        if (o.y + (d.y * t2) / hl > VENDOR_H) { b.off = true; t2 = raycast(this.map, o.x, o.z, d.x / hl, d.z / hl, maxD * hl); b.off = false; }
+        else kind = 'metal';
+      }
+      if (t2 / hl < res.t) { res.t = t2 / hl; res.kind = kind; res.n.set(hitNormal[0], 0, hitNormal[1]); }
     }
     if (d.y < 0) { const t = -o.y / d.y; if (t < res.t) { res.t = t; res.kind = 'floor'; res.n.set(0, 1, 0); } }
     if (d.y > 0) { const t = (CEIL - o.y) / d.y; if (t < res.t) { res.t = t; res.kind = 'ceil'; res.n.set(0, -1, 0); } }
@@ -993,10 +1252,10 @@ class Game {
       return;
     }
     if (!res.kind) return;
-    if (withSound) this.sound.impact(res.kind === 'crate' ? 'wall' : res.kind, p, dist, this.occluded(p));
+    if (withSound) this.sound.impact(res.kind === 'crate' ? 'wall' : res.kind === 'metal' ? 'plate' : res.kind, p, dist, this.occluded(p));
     if (!silentDecal) this.decals.add(p, res.n, res.kind === 'floor' ? 0.07 : 0.085);
-    this.particles.dust(p, res.n, res.kind === 'wall' ? light * 1.2 : res.kind === 'ceil' ? light * 1.4 : light * 0.9, res.kind);
-    if (res.kind !== 'floor' && Math.random() < 0.15) this.particles.sparks(p, res.n);
+    this.particles.dust(p, res.n, res.kind === 'wall' ? light * 1.2 : res.kind === 'ceil' ? light * 1.4 : light * 0.9, res.kind === 'metal' ? 'wall' : res.kind);
+    if (res.kind !== 'floor' && Math.random() < (res.kind === 'metal' ? 0.7 : 0.15)) this.particles.sparks(p, res.n);
   }
 
   eyePos(out) {
@@ -1016,7 +1275,8 @@ class Game {
     const up = this.upv.crossVectors(right, base);
     const moving = Math.min(1, Math.hypot(me.vel.x, me.vel.z) / 3.3);
     const ads = w.scope ? smoothstep(0.75, 0.98, me.ads) : me.ads;
-    const spread = lerp(w.spread, w.adsSpread, ads) * (me.crouch ? 0.8 : 1) + moving * w.moveSpread * (1 - ads * 0.5) + (me.onGround ? 0 : 0.06) + me.bloom * w.spread * 0.7;
+    const att = s.a | 0, sup = !!(att & ATT.SUP), las = att & ATT.LAS ? lerp(LASER_SPREAD, 1, ads) : 1;
+    const spread = (lerp(w.spread, w.adsSpread, ads) * (me.crouch ? 0.8 : 1) + moving * w.moveSpread * (1 - ads * 0.5) * (las < 1 ? 0.7 : 1) + (me.onGround ? 0 : 0.06) + me.bloom * w.spread * 0.7) * las;
     me.bloom = Math.min(1.6, me.bloom + (w.modes[0] === 'auto' ? 0.28 : 0.4));
     const hits = new Map(), rank = { l: 0, b: 1, h: 2 };
     const muzzleW = this.vmToWorld(this.vm.muzzle(this.v3));
@@ -1027,7 +1287,7 @@ class Game {
       const res = this.trace(origin, d, w.range);
       if (res.kind === 'player' && !this.isFriend(res.id)) {
         const h = hits.get(res.id) || { id: res.id, dmg: 0, zone: 'l' };
-        h.dmg += dmgAt(w, res.t) * zoneMul(w, res.zone);
+        h.dmg += dmgAt(w, res.t) * zoneMul(w, res.zone) * (sup ? SUP_DMG : 1);
         if (rank[res.zone] > rank[h.zone]) h.zone = res.zone;
         hits.set(res.id, h);
       }
@@ -1069,13 +1329,13 @@ class Game {
     this.vm.kick(type, me.ads);
     me.trauma = Math.min(1, me.trauma + fl.cam);
     me.fovPunch += fl.fov;
-    this.post.final.uniforms.uFlash.value = Math.max(this.post.final.uniforms.uFlash.value, 0.3);
-    if (this.scopeK < 0.6) { this.vmMuzzle.fire(this.vm.muzzle(this.v2), this.vm.flashSize(), 0.045); this.vmFlash.intensity = 6; }
+    this.post.final.uniforms.uFlash.value = Math.max(this.post.final.uniforms.uFlash.value, sup ? 0.05 : 0.3);
+    if (this.scopeK < 0.6 && !sup) { this.vmMuzzle.fire(this.vm.muzzle(this.v2), this.vm.flashSize(), 0.045); this.vmFlash.intensity = 6; }
     this.muzzleLight.position.copy(muzzleW);
-    this.muzzleLight.intensity = 22;
+    this.muzzleLight.intensity = sup ? 0 : 22;
     this.muzzleT = 0.05;
-    this.sound.shot(type, { fp: true, when: this.sound.now() + Math.max(0, LOCAL_LAT - overdue) });
-    this.particles.smoke(muzzleW, base, 0.8, type === 'shotgun' || type === 'sniper' ? 6 : 3, type === 'shotgun' ? 2 : 1);
+    this.sound.shot(type, { fp: true, sup, when: this.sound.now() + Math.max(0, LOCAL_LAT - overdue) });
+    this.particles.smoke(muzzleW, base, sup ? 0.5 : 0.8, type === 'shotgun' || type === 'sniper' ? 6 : sup ? 2 : 3, type === 'shotgun' ? 2 : 1);
     if (w.cycle) { s.needsCycle = true; me.cycling = true; this.vm.play(w.cls === 'bolt' ? 'bolt' : 'pump', w.cycle); }
     else if (w.cls !== 'revolver') {
       this.shells.eject(this.vm.ejectPort(this.v2), SHELL_KIND[type]);
@@ -1135,15 +1395,17 @@ class Game {
     const hitT = res.t, hitKind = res.kind;
     let mz = o;
     if (r && r.model.root.visible) { r.model.root.updateMatrixWorld(true); mz = r.model.muzzleWorld(new THREE.Vector3()); }
-    const cp = this.camera.position, dist = mz.distanceTo(cp);
-    this.sound.shot(m.w, { pos: mz, dist, occl: this.occluded(mz), when });
+    const cp = this.camera.position, dist = mz.distanceTo(cp), sup = !!m.s;
+    this.sound.shot(m.w, { pos: mz, dist, occl: this.occluded(mz), when, sup });
     if (dist < 70) {
-      this.muzzles.fire(mz, m.w === 'pistol' ? 0.3 : m.w === 'shotgun' ? 0.6 : 0.45);
-      const L = this.remoteLights[(this.rl = ((this.rl || 0) + 1) % 2)];
-      L.position.copy(mz); L.intensity = 18;
+      if (!sup) {
+        this.muzzles.fire(mz, m.w === 'pistol' ? 0.3 : m.w === 'shotgun' ? 0.6 : 0.45);
+        const L = this.remoteLights[(this.rl = ((this.rl || 0) + 1) % 2)];
+        L.position.copy(mz); L.intensity = 18;
+      }
       const end = o.clone().addScaledVector(d, hitT);
       const td = end.clone().sub(mz), len = td.length();
-      if (Math.random() < 0.6 && len > 1) this.tracers.add(mz, td.divideScalar(len), len);
+      if (Math.random() < (sup ? 0.25 : 0.6) && len > 1) this.tracers.add(mz, td.divideScalar(len), len);
       if (hitKind && hitT < w.range - 0.1) { res.t = hitT; res.kind = hitKind; this.impact(res, o, d, false, end.distanceTo(cp) < 16); }
       // supersonic crack / whiz when a round passes close to us
       const toMe = this.v1.copy(cp).sub(o), along = toMe.dot(d);
@@ -1198,6 +1460,9 @@ class Game {
     this.updateRemotes(dt);
     this.updateRemoteFlashlights();
     this.updateNades(dt);
+    this.updateDrops(dt);
+    this.updateCorpses(dt);
+    this.updateLasers();
     this.world.update(dt, this.time);
     this.particles.update(dt); this.fire.update(dt); this.tracers.update(dt); this.muzzles.update(dt); this.vmMuzzle.update(dt); this.shells.update(dt);
     this.boomLight.intensity = Math.max(0, this.boomLight.intensity - dt * 350);
@@ -1266,7 +1531,7 @@ class Game {
     const me = this.me;
     me.hurt = Math.max(0, me.hurt - dt * 1.2);
     me.trauma = Math.max(0, me.trauma - dt * 1.8);
-    if (!me.alive) { me.deathT = Math.min(1, me.deathT + dt * 1.6); me.vel.set(0, 0, 0); this.nearCrate = -1; this.nearDrop = null; return; }
+    if (!me.alive) { me.deathT = Math.min(1, me.deathT + dt * 1.6); me.vel.set(0, 0, 0); this.nearCrate = -1; this.nearDrop = null; this.nearVendor = null; return; }
     const w = WEAPONS[this.curType()];
     const pm = this.padMove;
     const f = clamp((this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0) - (pm ? pm[1] : 0), -1, 1);
@@ -1339,23 +1604,48 @@ class Game {
     const fx = -sy, fz = -cy;
     const wallD = raycast(this.map, me.pos.x, me.pos.z, fx, fz, 1.2);
     me.block = damp(me.block, clamp((0.72 - wallD) / 0.35, 0, 1) * (1 - me.ads * 0.6), 10, dt);
-    // interactables: dropped weapons first, then crates
-    let best = -1, bd = 2.1, bestDrop = null, dd = 2.2;
+    this.findInteractable();
+    // walking over health, armor, grenades, ammo and money takes them when they are useful
     for (const d of this.drops.values()) {
-      const dx = d.x - me.pos.x, dz = d.z - me.pos.z, dist = Math.hypot(dx, dz);
-      if (dist > dd || ((dx * fx + dz * fz) / (dist || 1) < 0.35 && dist > 0.9)) continue;
-      bestDrop = d; dd = dist;
+      if (d.k === 'weapon' || d.fly || this.time < (d.tryAt || 0)) continue;
+      if (Math.abs(d.x - me.pos.x) > 0.9 || Math.abs(d.z - me.pos.z) > 0.9 || Math.hypot(d.x - me.pos.x, d.z - me.pos.z) > 0.8) continue;
+      if (!this.useful(d)) continue;
+      d.tryAt = this.time + 0.5;
+      this.net.send({ t: 'pickup', id: d.id });
     }
-    this.map.crates.forEach((c, i) => {
-      if (this.world.crateState[i].target) return;
-      const dx = c.x - me.pos.x, dz = c.z - me.pos.z, d = Math.hypot(dx, dz);
-      if (d > bd) return;
-      if ((dx * fx + dz * fz) / d < 0.3 && d > 0.8) return;
-      if (raycast(this.map, me.pos.x, me.pos.z, dx / d, dz / d, d) < d - 0.05) return;
-      best = i; bd = d;
-    });
-    this.nearDrop = bestDrop;
-    this.nearCrate = bestDrop ? -1 : best;
+    if (this.shop && (!this.nearShop(this.shop.v) || this.endData)) this.closeShop();
+  }
+
+  // what the player is looking at within reach: an item on the carpet, a crate or a vending machine
+  findInteractable() {
+    const me = this.me, eye = this.eyePos(this.v1);
+    const cp = Math.cos(me.pitch), fx = -Math.sin(me.yaw) * cp, fy = Math.sin(me.pitch), fz = -Math.cos(me.yaw) * cp;
+    let best = null, bestS = 1;
+    // score < 1 means "inside the look cone"; the cone widens up close. obj: ['drop'|'crate'|'vendor', target]
+    const consider = (x, y, z, radius, reach, obj) => {
+      const dx = x - eye.x, dy = y - eye.y, dz = z - eye.z, hd = Math.hypot(dx, dz), d = Math.hypot(hd, dy);
+      if (hd > reach || d < 1e-3) return;
+      const ang = Math.acos(clamp((dx * fx + dy * fy + dz * fz) / d, -1, 1));
+      const sc = ang / (Math.atan(radius / d) + 0.07) + hd * 0.04;
+      if (sc >= bestS) return;
+      if (hd > 0.35 && raycast(this.map, me.pos.x, me.pos.z, dx / hd, dz / hd, hd) < hd - 0.05) return;
+      bestS = sc; best = obj;
+    };
+    for (const d of this.drops.values()) {
+      if (d.fly) continue;
+      consider(d.x, d.restY + 0.05, d.z, d.k === 'weapon' ? 0.3 : 0.2, 2.4, ['drop', d]);
+    }
+    this.map.crates.forEach((c, i) => { if (!this.world.crateState[i].target) consider(c.x, 0.28, c.z, 0.38, 2.1, ['crate', i]); });
+    for (const v of this.map.vendors) if (this.nearShop(v)) consider(v.x + v.nx * 0.33, 1.1, v.z + v.nz * 0.33, 0.75, 2.8, ['vendor', v]);
+    // a gun right at your feet is taken even without aiming at it (gamepad friendly)
+    if (!best) for (const d of this.drops.values()) if (d.k === 'weapon' && !d.fly && Math.hypot(d.x - me.pos.x, d.z - me.pos.z) < 0.75) { best = ['drop', d]; break; }
+    this.nearDrop = best && best[0] === 'drop' ? best[1] : null;
+    this.nearCrate = best && best[0] === 'crate' ? best[1] : -1;
+    this.nearVendor = best && best[0] === 'vendor' ? best[1] : null;
+  }
+  nearShop(v) {
+    const me = this.me, dx = me.pos.x - (v.x + v.nx * 0.6), dz = me.pos.z - (v.z + v.nz * 0.6);
+    return Math.hypot(dx, dz) < VENDOR_R + 0.4 && dx * v.nx + dz * v.nz > -0.3;
   }
 
   updateWeapon(dt) {
@@ -1386,7 +1676,7 @@ class Game {
       if (me.cookT >= GRENADE.fuse - 0.02) { me.cookT = GRENADE.fuse; this.throwNade(); this.vm.play('nade_throw', 0.45); }
       else if (!me.nadeHeld && an === 'nade_hold') this.vm.play('nade_throw', 0.45);
     }
-    if (!me.alive || this.isPaused() || this.endData) return;
+    if (!me.alive || this.isPaused() || this.endData || this.shop) return;
     // knife
     if (w.melee) {
       if (!an || an === 'inspect') {
@@ -1455,8 +1745,19 @@ class Game {
         const want = Math.atan2(-(me.killerPos[0] - me.pos.x), -(me.killerPos[1] - me.pos.z));
         me.deathYaw += angDiff(me.deathYaw, want) * (1 - Math.exp(-dt * 1.8));
       }
-      cam.position.set(me.pos.x, me.pos.y + lerp(eye, 0.28, e), me.pos.z);
-      cam.rotation.set(lerp(me.pitch, 0.25, e), me.deathYaw, lerp(0, 1.25, e));
+      const dp = me.dp;
+      if (dp) {
+        // the chest camera flies with the body, then lies on the carpet
+        dp.vy -= 9.8 * dt;
+        const q = { x: dp.x + dp.vx * dt, z: dp.z + dp.vz * dt };
+        collide(this.map, q, 0.2);
+        dp.x = q.x; dp.z = q.z; dp.y = Math.min(CEIL - 0.15, Math.max(0.28, dp.y + dp.vy * dt));
+        if (dp.y <= 0.28) { dp.vy = Math.max(0, dp.vy); const f = Math.exp(-6 * dt); dp.vx *= f; dp.vz *= f; }
+        if (dp.y >= CEIL - 0.15 && dp.vy > 0) dp.vy = 0;
+        if (dp.y > 0.3) dp.spinA = (dp.spinA || 0) + dp.spin * dt;
+        cam.position.set(dp.x, dp.y, dp.z);
+      } else cam.position.set(me.pos.x, me.pos.y + lerp(eye, 0.28, e), me.pos.z);
+      cam.rotation.set(lerp(me.pitch, 0.25, e) + (dp?.spinA || 0), me.deathYaw, lerp(0, 1.25, e));
     }
     const adsF = w.scope ? lerp(1, w.adsFov, this.scopeK) * lerp(1, 0.92, me.ads) : lerp(1, w.adsFov || 1, me.ads);
     const fov = settings.fov * adsF + me.fovPunch * (1 - this.scopeK);
@@ -1515,9 +1816,9 @@ class Game {
       r.speed = damp(r.speed, moved < 3 ? moved / Math.max(dt, 1e-4) : 0, 10, dt);
       r.lean = damp(r.lean, r.flags & F.LEAN_L ? -1 : r.flags & F.LEAN_R ? 1 : 0, 9, dt);
       const dist = Math.hypot(r.x - cp.x, r.z - cp.z);
-      r.model.root.visible = dist < 62;
+      r.model.root.visible = dist < 62 && r.alive && !(rt < (r.hideUntil ?? -1));
       if (!r.model.root.visible) continue;
-      r.model.setWeapon(WEAPON_ORDER[r.w] || 'pistol');
+      r.model.setWeapon(WEAPON_ORDER[r.w] || 'pistol', r.att | 0);
       const L = this.world.sampleLight(r.x, r.z) * 0.95 + 0.03;
       r.model.update(dt, { x: r.x, y: r.y, z: r.z, yaw: r.yaw, pitch: r.pitch, crouch: !!(r.flags & F.CROUCH), speed: r.alive ? r.speed : 0, alive: r.alive, flash: r.flags & F.FLASH, lean: r.lean, reload: r.flags & F.RELOAD, sprint: r.flags & F.SPRINT }, L);
       if (r.alive && ((r.flags ^ was) & F.FLASH) && dist < 15) this.sound.play('ui_click', { cat: 'mech', pos: this.v1.set(r.x, r.y + 1.2, r.z), vol: 0.35, ref: 1.2, occl: this.occluded(this.v1) });
@@ -1536,6 +1837,36 @@ class Game {
         }
       }
     }
+  }
+
+  // laser sights: ours along the view, others' along their aim (it gives them away)
+  updateLasers() {
+    const L = this.lasers, me = this.me, cp = this.camera.position;
+    L.begin();
+    const s = this.cur();
+    if (this.state === 'game' && me.alive && (s.a | 0) & ATT.LAS && !WEAPONS[s.w].melee && me.sprintK < 0.5 && this.scopeK < 0.6 && !this.vm.animName?.startsWith('nade')) {
+      const e = this.vm.laserPoint(this.v1);
+      if (e) {
+        // zeroed on the crosshair: the dot shows where a hip-fired round goes
+        this.camera.localToWorld(e);
+        const dir = this.v2.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        const res = this.trace(cp, dir, 60);
+        const hit = this.v3.copy(cp).addScaledVector(dir, res.t - 0.02);
+        e.lerp(hit, Math.min(0.5, 0.35 / Math.max(0.5, e.distanceTo(hit))));
+        L.add(e, hit, cp, 0.22);
+      }
+    }
+    for (const r of this.remotes.values()) {
+      if (!r.alive || !((r.att | 0) & ATT.LAS) || !r.model.root.visible || r.flags & F.SPRINT) continue;
+      if (Math.hypot(r.x - cp.x, r.z - cp.z) > 45) continue;
+      const g = r.model.gun, d = g.userData;
+      if (!d.laser) continue;
+      const e = this.v1.copy(d.laser).applyMatrix4(g.matrixWorld);
+      const dir = this.v2.set(-Math.sin(r.yaw) * Math.cos(r.pitch), Math.sin(r.pitch), -Math.cos(r.yaw) * Math.cos(r.pitch));
+      const res = this.trace(e, dir, 60, true);
+      L.add(e, this.v3.copy(e).addScaledVector(dir, res.t - 0.02), cp, 0.4);
+    }
+    L.end();
   }
 
   // the two nearest remote flashlights get real spot lights (aimed from the gun muzzle)
@@ -1567,6 +1898,9 @@ class Game {
       if (d < bd) { bd = d; best = fl; }
     }
     this.sound.buzz(best ? this.v1.set(best.f.x, CEIL - 0.1, best.f.z) : null, best ? (best.on ? 1 : 0.15) : 0);
+    let vb = null, vd = 9;
+    for (const v of this.map.vendors) { const d = Math.hypot(v.x - cp.x, v.z - cp.z); if (d < vd) { vd = d; vb = v; } }
+    this.sound.vendHum(vb ? this.v1.set(vb.x, 1.2, vb.z) : null, vb && !this.occluded(this.v1) ? 1 : 0.35);
     this.ambT = (this.ambT ?? 10) - dt;
     if (this.ambT <= 0) {
       this.ambT = 12 + Math.random() * 26;
@@ -1595,10 +1929,17 @@ class Game {
       hud.crosshair(settings.xhair && me.ads < 0.5 && me.alive);
       hud.protect(me.alive && this.time < me.protectUntil);
       const useKey = this.pad.active && !this.locked ? 'X' : keyLabel(settings.binds.use);
-      if (this.nearDrop && me.alive) {
-        const W = WEAPONS[this.nearDrop.w], held = me.inv[W.slot];
-        hud.prompt(`<b>[${useKey}]</b> ${esc(W.label)} al${held && held.w !== this.nearDrop.w ? ` <span style="opacity:.6">(${esc(WEAPONS[held.w].short)} bırakılır)</span>` : ''}`);
-      } else if (this.nearCrate >= 0 && me.alive) hud.prompt(`<b>[${useKey}]</b> Kutuyu aç`);
+      const d = this.nearDrop;
+      if (this.shop || !me.alive) hud.prompt(null);
+      else if (d && d.k === 'weapon') {
+        const W = WEAPONS[d.w], held = me.inv[W.slot], a = d.a | 0;
+        const att = a ? ` <span class="att">${ATTACHMENTS.filter((x) => a & x.bit).map((x) => esc(x.label)).join(' · ')}</span>` : '';
+        hud.prompt(`<b>[${useKey}]</b> ${esc(W.label)} al${att}${held && held.w !== d.w ? ` <span style="opacity:.6">(${esc(WEAPONS[held.w].short)} bırakılır)</span>` : held ? ' <span style="opacity:.6">(mermi)</span>' : ''}`);
+      } else if (d) {
+        const label = esc(itemLabel(d));
+        hud.prompt(this.useful(d) ? `<b>[${useKey}]</b> ${label} <span style="opacity:.6">· üzerinden geçerek de alınır</span>` : `${label} <span style="opacity:.6">· ${this.fullText(d).toLowerCase()}</span>`);
+      } else if (this.nearCrate >= 0) hud.prompt(`<b>[${useKey}]</b> Kutuyu aç`);
+      else if (this.nearVendor) hud.prompt(`<b>[${useKey}]</b> Badem suyu otomatı <span class="cashc">$${me.cash}</span>`);
       else hud.prompt(null);
       if (!me.alive) hud.respawn(Math.max(0, RESPAWN_T - (this.time - me.deathAt)));
       if (this.scoreOpen) this.renderScore();

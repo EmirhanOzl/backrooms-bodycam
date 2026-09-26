@@ -34,7 +34,10 @@
     <div id="prompt"></div>
     <div id="toasts"></div>
     <div id="streak"></div>
+    <div id="payout"></div>
+    <div id="shop" class="hidden"></div>
     <div id="vitals">
+      <div id="cash"><span class="cur">$</span><span id="cashv">0</span><span id="cashadd"></span></div>
       <div class="bar"><label>SAĞLIK</label><div class="track"><div id="hpbar"></div></div><span id="hp">100</span></div>
       <div class="bar"><label>ZIRH</label><div class="track"><div id="arbar"></div></div><span id="ar">0</span></div>
       <div class="bar thin" id="stam"><label>NEFES</label><div class="track"><div id="stbar"></div></div><span></span></div>
@@ -66,12 +69,12 @@
         <button data-p="about">HAKKINDA</button>
         <button id="btnExit" class="hidden">ÇIKIŞ</button>
       </nav>
-      <div class="ver">v1.1.0 · ERKEN ERİŞİM</div>
+      <div class="ver">v1.2.0 · ERKEN ERİŞİM</div>
     </div>
     <div class="menu-right">
       <section id="p-offline" class="panel">
         <h3>ÇEVRİMDIŞI · BOTLARA KARŞI</h3>
-        <p class="desc">Herkes herkese karşı ya da iki takım halinde. Kutulardan silah, zırh, ilk yardım ve el bombası topla; öldürdüğün operatörlerin silahlarını yerden al.</p>
+        <p class="desc">Herkes herkese karşı ya da iki takım halinde. Kutular ve cesetler ganimet saçar; leşlerden para kazan, badem suyu otomatlarından silah, zırh ve eklenti al.</p>
         <div class="row"><span class="lab">Mod</span><select id="gmode"><option value="ffa">Herkes herkese (FFA)</option><option value="tdm">Takım çatışması (TDM)</option></select></div>
         <div class="row"><span class="lab">Işıklandırma</span><select id="glight"><option value="normal">Normal</option><option value="dim">Loş — bozuk floresanlar</option><option value="dark">Karartma — fener şart</option></select></div>
         <div class="row"><span class="lab">Bot sayısı</span><input id="bots" type="range" min="1" max="11" value="6"><span id="botsv" class="val">6</span></div>
@@ -92,7 +95,7 @@
       <section id="p-about" class="panel hidden">
         <h3>HAKKINDA</h3>
         <p class="desc">Bir göğüs kamerası kaydı olarak anlatılan, Backrooms Seviye 0'da geçen taktiksel bir nişancı oyunu. Harita her maçta tohumdan yeniden üretilir; ışıklar pişirilir, sesler oyun açılırken sentezlenir — tek bir harici dosya yok.</p>
-        <p class="desc small">İpuçları: Sesler duvar arkasından boğuk gelir; kulaklıkla adımlardan yön bulabilirsin. Feneri açık olan uzaktan görünür. Sırttan bıçaklama tek vuruşta öldürür. El bombasını <kbd>G</kbd> basılı tutarak bekletebilirsin — ama çok bekleme.</p>
+        <p class="desc small">İpuçları: Sesler duvar arkasından boğuk gelir; kulaklıkla adımlardan yön bulabilirsin. Feneri açık olan uzaktan görünür. Sırttan bıçaklama tek vuruşta öldürür. El bombasını <kbd>G</kbd> basılı tutarak bekletebilirsin — ama çok bekleme. Yerdeki eşyalara bakıp <kbd>F</kbd>'ye bas; sağlık, zırh ve parayı üzerinden geçerek topla.</p>
       </section>
     </div>
   </div>

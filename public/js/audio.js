@@ -153,8 +153,14 @@ export class Sound {
   }
 
   // ------------------------------------------------------------------ semantic helpers
-  shot(type, { fp = false, pos = null, dist = 0, occl = false, when = 0 } = {}) {
+  shot(type, { fp = false, pos = null, dist = 0, occl = false, when = 0, sup = false } = {}) {
     const L = LOUD[type] || 0.9;
+    if (sup && this.bank['sp_' + type]) {
+      if (fp) { this.play('sp_' + type, { cat: 'fp', vol: L * 0.55, verb: 0.3, when, jitter: 0.02 }); return; }
+      if (dist > 45) return;
+      this.play('sn_' + type, { cat: 'gun', pos, vol: L * 0.7, ref: 2.5, rolloff: 1.4, occl, when, jitter: 0.03, verb: 0.35 });
+      return;
+    }
     if (fp) { this.play('fp_' + type, { cat: 'fp', vol: L * 0.9, verb: 0.5, when, jitter: 0.02 }); return; }
     const far = dist > 30;
     this.play((far ? 'fr_' : 'np_') + type, {
@@ -261,6 +267,20 @@ export class Sound {
     const t = this.ctx.currentTime;
     if (pos) { const P = this.buzzP; if (P.positionX) { P.positionX.setValueAtTime(pos.x, t); P.positionY.setValueAtTime(pos.y, t); P.positionZ.setValueAtTime(pos.z, t); } }
     this.buzzG.gain.setTargetAtTime(pos ? 0.05 * level * (0.8 + Math.random() * 0.4) : 0, t, 0.015);
+  }
+  // compressor hum of the nearest vending machine (looped, positional)
+  vendHum(pos, level) {
+    if (!this.ready || !this.bank.vend_hum) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    if (!this.vhG) {
+      const src = ctx.createBufferSource(); src.buffer = this.bank.vend_hum[0]; src.loop = true;
+      this.vhG = ctx.createGain(); this.vhG.gain.value = 0;
+      this.vhP = ctx.createPanner();
+      Object.assign(this.vhP, { panningModel: 'equalpower', distanceModel: 'inverse', refDistance: 1.2, rolloffFactor: 1.6 });
+      src.connect(this.vhG).connect(this.vhP).connect(this.amb); src.start();
+    }
+    if (pos) { const P = this.vhP; if (P.positionX) { P.positionX.setValueAtTime(pos.x, t); P.positionY.setValueAtTime(pos.y, t); P.positionZ.setValueAtTime(pos.z, t); } }
+    this.vhG.gain.setTargetAtTime(pos ? 0.05 * level : 0, t, 0.2);
   }
   distant(pos) {
     const pick = ['amb_thud', 'amb_creak', 'amb_steps', 'amb_knock', 'amb_drone', 'amb_pop', 'amb_scream'];

@@ -215,6 +215,24 @@ function gunshot(type, mode) {
   return trim(norm(mono([a, b]), 0.8));
 }
 
+// suppressed: the muzzle blast is trapped in the baffles, what is left is a dull "thup", the action
+// cycling and (for rifles) the supersonic crack downrange
+function supshot(type, fp) {
+  const P = GUNS[type];
+  const x = mk(fp ? 0.45 : 0.35);
+  const b = env(noise(0.2), 0.0006, P.bodyT * 0.9);
+  lp(b, expSweep(P.bodyF[0] * 0.28, P.bodyF[1] * 0.45, P.bodyTau), 0.8); lp(b, 2600, 0.7);
+  add(x, b, 0, 1.2);
+  add(x, bp(env(noise(0.08), 0.0004, 0.012), 1500 * rr(0.9, 1.1), 1.2), 0, 0.5);
+  add(x, tone(0.15, P.boomF[0] * 0.9, P.boomF[1], P.boomTau, 0.0015, P.boomT * 0.6), 0, P.boomA * 0.55);
+  if (!fp && P.crack > 0.6) add(x, hp(nwave(0.0007), 900), 0.002, P.crack * 0.55);
+  const mech = P.mech || [[0.02, 2600, 0.3]];
+  for (const [t, f, a] of mech) add(x, click(f * rr(0.95, 1.05), a * (fp ? 2.2 : 1.2), 0.01), t * 0.8);
+  drive(x, 1.6);
+  if (fp) { const [L, Rr] = reflect(norm(x, 0.9), 0.7, 3000, 0.08); return [trim(norm(L, 0.9)), trim(norm(Rr, 0.9))]; }
+  return trim(norm(mono(reflect(x, 0.6, 2800, 0.08)), 0.9));
+}
+
 // ------------------------------------------------------------------ recipes
 const R = {};
 
@@ -371,6 +389,35 @@ R.ui_hover = () => trim(norm(click(2800, 1, 0.003), 0.25));
 R.ui_toast = () => { const x = tone(0.12, 1400, 1400, 1, 0.003, 0.04, 'tri'); return trim(norm(x, 0.35)); };
 R.ui_end = () => { const x = mk(1.4); [523, 392, 330].forEach((f, i) => add(x, tone(0.9, f, f, 1, 0.01, 0.35, 'tri'), i * 0.18, 0.5)); return trim(norm(x, 0.55)); };
 
+// loot hitting the carpet, vending machine, money
+R.it_gun = () => { const x = mk(0.4); add(x, burst(0.1, 'lp', 520, 0.8, 0.001, 0.03, 1.3)); add(x, partials(0.3, [[rr(900, 1200), 0.35, 0.05], [rr(1900, 2300), 0.25, 0.035], [3400, 0.12, 0.02]]), 0.002); add(x, click(rr(2400, 3200), 0.6, 0.006), rr(0.05, 0.09)); return trim(norm(drive(x, 1.3), 0.8)); };
+R.it_box = () => { const x = mk(0.35); add(x, burst(0.12, 'lp', 380, 0.8, 0.001, 0.04, 1.4)); add(x, partials(0.25, [[rr(420, 520), 0.4, 0.05], [rr(980, 1150), 0.25, 0.03]]), 0.002); add(x, click(1800, 0.4, 0.006), 0.1); return trim(norm(x, 0.8)); };
+R.it_soft = () => { const x = mk(0.3); add(x, burst(0.12, 'lp', 450, 0.7, 0.002, 0.035, 1.2)); add(x, burst(0.08, 'bp', rr(1400, 2000), 0.8, 0.004, 0.02, 0.35)); return trim(norm(x, 0.7)); };
+R.it_cash = () => { const x = mk(0.4); add(x, burst(0.08, 'lp', 500, 0.7, 0.002, 0.02, 0.8)); const r = noise(0.3); hp(r, 3000); env(r, 0.005, 0.06); add(x, r, 0.005, 0.7); return trim(norm(x, 0.6)); };
+R.it_bottle = () => { const x = mk(0.4); add(x, burst(0.08, 'lp', 600, 0.7, 0.001, 0.02, 0.9)); add(x, partials(0.3, [[rr(1300, 1500), 0.35, 0.07], [rr(2900, 3200), 0.2, 0.05]]), 0.002); const s = noise(0.25); bp(s, 700, 4); env(s, 0.02, 0.06); add(x, s, 0.03, 0.4); return trim(norm(x, 0.7)); };
+R.ui_cash = () => {
+  const x = mk(0.7);
+  add(x, partials(0.5, [[2637, 0.5, 0.18], [3951, 0.3, 0.14], [5274, 0.15, 0.1]]), 0.0);
+  add(x, partials(0.5, [[3520, 0.5, 0.2], [5274, 0.3, 0.15], [7040, 0.12, 0.1]]), 0.09);
+  add(x, click(3000, 0.6, 0.004));
+  const r = noise(0.2); hp(r, 4000); env(r, 0.003, 0.03); add(x, r, 0.02, 0.4);
+  return trim(norm(x, 0.55));
+};
+R.ui_nope = () => { const x = mk(0.3); add(x, tone(0.12, 330, 300, 1, 0.004, 0.05, 'tri'), 0, 0.6); add(x, tone(0.14, 247, 230, 1, 0.004, 0.06, 'tri'), 0.11, 0.6); return trim(norm(x, 0.45)); };
+R.att_on = () => seq(0.45, [[0, slideN(0.12, 2200, 1.5, 0.01, 0.04, 0.7)], [0.13, click(3100, 1, 0.007)], [0.2, click(2500, 0.6, 0.006)], [0.13, partials(0.15, [[1900, 0.12, 0.04]])]]);
+R.vend = () => {
+  // coin, relay clunk, motor spiral, the drop into the tray
+  const x = mk(1.5);
+  add(x, partials(0.2, [[4100, 0.25, 0.06], [6200, 0.15, 0.04]]), 0);
+  add(x, click(2200, 0.7, 0.008), 0.12);
+  const m = mk(0.6); let ph = 0; for (let i = 0; i < m.length; i++) { ph += 118 / SR; m[i] = ((ph % 1) < 0.5 ? 1 : -1) * 0.3; }
+  lp(m, 900, 0.8); env(m, 0.05, 0.5, 0.35); add(x, m, 0.2, 0.9);
+  add(x, burst(0.2, 'lp', 260, 0.8, 0.002, 0.06, 1.6), 0.86);
+  add(x, partials(0.3, [[540, 0.3, 0.06], [1210, 0.2, 0.04]]), 0.86);
+  return trim(norm(x, 0.85));
+};
+R.vend_hum = () => { const x = mk(2); for (let i = 0; i < x.length; i++) { const t = i / SR; x[i] = Math.sin(2 * Math.PI * 60 * t) * 0.5 + Math.sin(2 * Math.PI * 120 * t) * 0.35 + Math.sin(2 * Math.PI * 180 * t) * 0.12; } add(x, bp(noise(2), 1800, 2), 0, 0.03); return norm(x, 0.5); };
+
 // player
 R.hurt = () => { const x = mk(0.35); add(x, tone(0.3, 85, 38, 0.06, 0.002, 0.1), 0, 1); add(x, burst(0.1, 'lp', 700, 0.7, 0.001, 0.035, 0.7)); add(x, burst(0.05, 'bp', 1600, 1.5, 0.0003, 0.01, 0.35)); return trim(norm(drive(x, 1.6), 0.9)); };
 R.hurt_head = () => { const x = mk(0.5); add(x, R.hurt(), 0, 1); add(x, partials(0.4, [[2200, 0.15, 0.2], [3300, 0.1, 0.15]]), 0.01); return trim(norm(x, 0.9)); };
@@ -412,11 +459,14 @@ const COUNTS = {
   ui_hit: 2, ui_head: 1, ui_armor: 1, ui_kill: 1, ui_killhs: 1, ui_streak: 1, ui_pickup: 1, ui_crate: 1, ui_beep: 1, ui_click: 1, ui_hover: 1, ui_toast: 1, ui_end: 1,
   hurt: 3, hurt_head: 1, heart: 1, breath: 2, death: 1,
   amb_thud: 1, amb_creak: 1, amb_steps: 1, amb_knock: 1, amb_drone: 1, amb_pop: 1, amb_scream: 1, ir: 1,
+  it_gun: 3, it_box: 2, it_soft: 2, it_cash: 2, it_bottle: 2, ui_cash: 1, ui_nope: 1, att_on: 1, vend: 1, vend_hum: 1,
 };
+const SUPPRESSIBLE = ['pistol', 'smg', 'rifle', 'm4', 'sniper'];
 
 export function soundList() {
   const list = [];
   for (const w of Object.keys(GUNS)) { list.push(['fp_' + w, 3], ['np_' + w, 2], ['fr_' + w, 2]); }
+  for (const w of SUPPRESSIBLE) { list.push(['sp_' + w, 2], ['sn_' + w, 2]); }
   for (const [k, n] of Object.entries(COUNTS)) list.push([k, n]);
   return list;
 }
@@ -426,6 +476,8 @@ export function synthOne(name, variant, sampleRate) {
   rnd = mulberry32(hash(name) + variant * 7919);
   const m = /^(fp|np|fr)_(\w+)$/.exec(name);
   if (m) return gunshot(m[2], m[1] === 'fp' ? 'fp' : m[1] === 'np' ? 'near' : 'far');
+  const s = /^(sp|sn)_(\w+)$/.exec(name);
+  if (s) return supshot(s[2], s[1] === 'sp');
   return R[name]();
 }
 

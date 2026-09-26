@@ -287,3 +287,64 @@ export function scorchTexture() {
   for (let i = 0; i < 18; i++) { const a = R() * 6.28, l = 30 + R() * 30; x.lineWidth = 1 + R() * 3; x.beginPath(); x.moveTo(64, 64); x.lineTo(64 + Math.cos(a) * l, 64 + Math.sin(a) * l); x.stroke(); }
   return tex(c, { repeat: false });
 }
+
+// Almond-water vending machine: painted front (lit by the level) + self-lit sign and window (overlay).
+export function vendorTextures() {
+  const W = 256, H = 544, R = mulberry32(21);
+  const [c, x] = canvas(W, H);
+  const noise = makeNoise(R, 16);
+  // cream enamel, grimy toward the bottom
+  perPixel(x, W, H, (d, i, px, py) => {
+    const n = fbm(noise, px / 30, py / 30, 3) - 0.5, grime = Math.max(0, (py - 380) / 164) * 0.35;
+    const k = 0.9 + n * 0.12 - grime;
+    d[i] = 204 * k; d[i + 1] = 190 * k; d[i + 2] = 150 * k; d[i + 3] = 255;
+  });
+  x.fillStyle = '#3b2a1a'; x.fillRect(0, 0, W, 76);                       // sign housing
+  x.fillStyle = '#20180f'; x.fillRect(12, 84, 170, 322);                   // window frame
+  x.fillStyle = '#6d6150'; x.fillRect(190, 96, 54, 250);                   // control panel
+  x.fillStyle = '#1b1712'; x.fillRect(200, 108, 34, 22);                   // price display
+  for (let r = 0; r < 4; r++) for (let q = 0; q < 3; q++) {
+    x.fillStyle = '#d8d2c0'; x.fillRect(199 + q * 12, 142 + r * 16, 9, 11);
+    x.fillStyle = '#4a4034'; x.font = 'bold 8px monospace'; x.fillText(String((r * 3 + q + 1) % 10), 201 + q * 12, 151 + r * 16);
+  }
+  x.fillStyle = '#26211a'; x.fillRect(208, 222, 18, 34); x.fillStyle = '#0c0a08'; x.fillRect(215, 226, 4, 26); // bill / coin slot
+  x.fillStyle = '#9a8f78'; x.fillRect(204, 270, 26, 40); x.fillStyle = '#1a1612'; x.fillRect(209, 290, 16, 14);   // coin return
+  x.fillStyle = '#1b1712'; x.fillRect(22, 430, 156, 74);                  // dispense opening
+  x.fillStyle = '#3a342b'; x.fillRect(26, 434, 148, 36);                  // flap
+  x.fillStyle = '#d9c9a0'; x.font = 'bold 13px monospace'; x.fillText('İT', 92, 458);
+  x.fillStyle = 'rgba(70,40,20,0.35)';
+  for (let i = 0; i < 26; i++) { x.beginPath(); x.arc(R() * W, 470 + R() * 74, 2 + R() * 7, 0, 7); x.fill(); }  // rust
+  x.fillStyle = 'rgba(0,0,0,0.25)'; x.fillRect(0, H - 14, W, 14);
+  const front = tex(c, { repeat: false });
+
+  // self-lit overlay: glowing sign + lit window with rows of bottles
+  const [c2, y] = canvas(W, H);
+  y.clearRect(0, 0, W, H);
+  const sg = y.createLinearGradient(0, 8, 0, 70);
+  sg.addColorStop(0, '#f6ecc8'); sg.addColorStop(1, '#d9c796');
+  y.fillStyle = sg; y.fillRect(8, 8, W - 16, 60);
+  y.fillStyle = '#5a3a1c'; y.font = 'bold 30px monospace'; y.textAlign = 'center';
+  y.fillText('BADEM SUYU', W / 2, 44);
+  y.font = 'bold 11px monospace'; y.fillText('SEVİYE 0 · SOĞUK', W / 2, 61);
+  y.textAlign = 'left';
+  const wg = y.createLinearGradient(16, 88, 180, 400);
+  wg.addColorStop(0, '#dfe6d6'); wg.addColorStop(1, '#a9b39c');
+  y.fillStyle = wg; y.fillRect(16, 88, 162, 314);
+  for (let s = 0; s < 5; s++) {
+    const sy = 92 + s * 62;
+    for (let b = 0; b < 5; b++) {
+      const bx = 22 + b * 31;
+      y.fillStyle = s === 4 && b > 2 ? 'rgba(0,0,0,0.12)' : '#f2f1e8'; y.fillRect(bx + 6, sy + 12, 17, 40);      // bottle
+      y.fillStyle = '#c49a5a'; y.fillRect(bx + 6, sy + 26, 17, 14);                                          // label
+      y.fillStyle = '#2c5ca8'; y.fillRect(bx + 10, sy + 5, 9, 7);                                            // cap
+      y.fillStyle = 'rgba(255,255,255,0.5)'; y.fillRect(bx + 8, sy + 14, 3, 36);
+    }
+    y.fillStyle = '#7d7666'; y.fillRect(16, sy + 54, 162, 5);                                               // shelf + spiral
+  }
+  y.fillStyle = 'rgba(255,255,250,0.9)'; y.fillRect(18, 90, 158, 4);                                        // tube
+  y.fillStyle = 'rgba(255,255,255,0.12)'; y.beginPath(); y.moveTo(16, 88); y.lineTo(90, 88); y.lineTo(30, 402); y.lineTo(16, 402); y.fill(); // glare
+  y.fillStyle = '#ff5b3a'; y.font = 'bold 14px monospace'; y.fillText('$', 203, 125);
+  y.fillStyle = '#7dff9a'; y.fillRect(221, 116, 8, 8);
+  const glow = tex(c2, { repeat: false });
+  return { front, glow };
+}

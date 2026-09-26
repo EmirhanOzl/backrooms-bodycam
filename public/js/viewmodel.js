@@ -3,7 +3,7 @@
 // sounds and gameplay (ammo applied when the magazine seats, knife hit frame, grenade release...).
 import * as THREE from 'three';
 import { WEAPON_ORDER, WEAPONS } from './shared/weapons.js';
-import { buildGun, buildGrenade, FPArms } from './models.js';
+import { buildGun, buildGrenade, FPArms, decorateGun } from './models.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -180,6 +180,7 @@ export class Viewmodel {
   constructor(scene, M) {
     this.root = new THREE.Group();
     scene.add(this.root);
+    this.M = M;
     this.guns = {};
     for (const t of WEAPON_ORDER) {
       const g = buildGun(t, M);
@@ -332,5 +333,8 @@ export class Viewmodel {
   // positions in viewmodel (camera) space
   muzzle(out) { return out.copy(this.gun.userData.muzzle).applyMatrix4(this.gun.matrixWorld); }
   ejectPort(out) { return out.copy(this.gun.userData.eject).applyMatrix4(this.gun.matrixWorld); }
-  flashSize() { return POSE[this.type].flash; }
+  flashSize() { return this.gun.userData.suppressed ? 0.04 : POSE[this.type].flash; }
+  // attachments on the first-person gun of a type (rebuilt only when they change)
+  setAttachments(type, a) { const g = this.guns[type]; if (g && (g.userData.att | 0) !== (a | 0)) decorateGun(g, type, a, this.M); }
+  laserPoint(out) { const d = this.gun?.userData; return d && d.laser ? out.copy(d.laser).applyMatrix4(this.gun.matrixWorld) : null; }
 }

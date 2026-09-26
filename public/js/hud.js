@@ -13,7 +13,7 @@ export class Hud {
     this.el = {};
     for (const id of ['hud', 'clock', 'serial', 'timer', 'kd', 'feed', 'xhair', 'hitmark', 'dmg', 'nadewarn', 'aimname', 'prompt', 'toasts', 'streak',
       'hp', 'hpbar', 'ar', 'arbar', 'stbar', 'stam', 'wname', 'wmode', 'mag', 'res', 'slots', 'banner', 'death', 'killer', 'killinfo', 'respawn',
-      'score', 'scorebody', 'fraglimit', 'endscreen', 'fps', 'cook', 'protect', 'weapon']) this.el[id] = $(id);
+      'score', 'scorebody', 'fraglimit', 'endscreen', 'fps', 'cook', 'protect', 'weapon', 'cashv', 'cashadd', 'payout', 'shop']) this.el[id] = $(id);
     this.cache = {};
     this.nadeEls = [];
   }
@@ -55,6 +55,44 @@ export class Hud {
     parts.push(`<span class="${slot === 'melee' ? 'on' : ''}"><b>${keyLabel(B.slot3)}</b>BIÇAK</span>`);
     parts.push(`<span class="${inv.nades ? '' : 'off'}"><b>${keyLabel(B.nade)}</b>M67 ×${inv.nades}</span>`);
     this.set('slots', 'html', parts.join(''));
+  }
+  cash(v, add = 0) {
+    this.set('cashv', 'text', String(v));
+    if (!add) return;
+    const a = this.el.cashadd;
+    a.textContent = `${add > 0 ? '+' : '−'}$${Math.abs(add)}`;
+    a.className = '';
+    void a.offsetWidth;
+    a.className = add > 0 ? 'show' : 'show neg';
+  }
+  // itemized kill money: lines slide in one after another, then the total
+  payout(lines, total) {
+    const b = document.createElement('div');
+    b.className = 'blk';
+    b.innerHTML = lines.map(([l, v], i) => `<div class="ln" style="animation-delay:${(i * 0.09).toFixed(2)}s">${esc(l)}<b>+$${v}</b></div>`).join('')
+      + `<div class="ln tot" style="animation-delay:${(lines.length * 0.09 + 0.05).toFixed(2)}s">+$${total}</div>`;
+    this.el.payout.appendChild(b);
+    while (this.el.payout.children.length > 2) this.el.payout.firstChild.remove();
+    setTimeout(() => b.remove(), 3400);
+  }
+  // vending machine menu (null hides it)
+  shop(d) {
+    const e = this.el.shop;
+    if (!d) { e.classList.add('hidden'); return; }
+    const groups = [['GEREÇ', (it) => !['weapon', 'att'].includes(it.k)], ['SİLAH', (it) => it.k === 'weapon'], ['EKLENTİ · ' + d.weapon, (it) => it.k === 'att']];
+    let html = `<h3>BADEM SUYU OTOMATI <span>$${d.cash}</span></h3><div class="sub">Aldığın şey bölmeden yere düşer — silahları yerden al.</div>`;
+    d.items.forEach((it, i) => { it.i = i; });
+    for (const [title, fn] of groups) {
+      html += `<div class="grp">${esc(title)}</div>`;
+      for (const it of d.items.filter(fn)) {
+        html += `<div class="it${it.i === d.sel ? ' sel' : ''}${it.why ? ' off' : ''}"><span class="n">${it.i < 10 ? (it.i + 1) % 10 : ''}</span><span>${esc(it.label)} <span class="note">${esc(it.note || '')}</span>${it.why && it.i === d.sel ? `<span class="why">${esc(it.why)}</span>` : ''}</span><span></span><span class="p">$${it.price}</span></div>`;
+      }
+    }
+    html += d.pad
+      ? '<div class="keys"><b>D-pad</b> seç · <b>A</b> satın al · <b>B</b> kapat</div>'
+      : `<div class="keys"><b>Tekerlek / ↑↓</b> seç · <b>Sol tık / Enter</b> satın al · <b>1-0</b> hızlı al · <b>${esc(keyLabel(settings.binds.use))}</b> kapat</div>`;
+    e.innerHTML = html;
+    e.classList.remove('hidden');
   }
   crosshair(on) { this.set('xhair', 'display', on ? '' : 'none'); }
   prompt(html) { this.set('prompt', 'display', html ? 'block' : 'none'); if (html) this.set('prompt', 'html', html); }
@@ -148,8 +186,8 @@ export class Hud {
     e.innerHTML = `<div class="panel end">
       <div class="endtitle ${won ? 'won' : ''}">${title}</div>
       <div class="endsub">${place ? `${place}. SIRA` : ''}${me ? ` · ${me.k} LEŞ · ${me.d} ÖLÜM · %${me.acc} İSABET · ${me.hs} KAFADAN · EN İYİ SERİ ${me.best}` : ''}</div>
-      <table><thead><tr><th>#</th><th>OPERATÖR</th><th>LEŞ</th><th>ÖLÜM</th><th>KAFA</th><th>İSABET</th><th>HASAR</th></tr></thead><tbody>
-      ${data.table.map((r, i) => `<tr class="${r.id === myId ? 'me' : ''}"><td>${i + 1}</td><td>${tdm ? `<span class="tdot t${r.team}"></span>` : ''}${esc(r.name)} ${r.bot ? '<span class="bot">BOT</span>' : ''}</td><td>${r.k}</td><td>${r.d}</td><td>${r.hs}</td><td>%${r.acc}</td><td>${r.dmg}</td></tr>`).join('')}
+      <table><thead><tr><th>#</th><th>OPERATÖR</th><th>LEŞ</th><th>ÖLÜM</th><th>KAFA</th><th>İSABET</th><th>HASAR</th><th>KAZANÇ</th></tr></thead><tbody>
+      ${data.table.map((r, i) => `<tr class="${r.id === myId ? 'me' : ''}"><td>${i + 1}</td><td>${tdm ? `<span class="tdot t${r.team}"></span>` : ''}${esc(r.name)} ${r.bot ? '<span class="bot">BOT</span>' : ''}</td><td>${r.k}</td><td>${r.d}</td><td>${r.hs}</td><td>%${r.acc}</td><td>${r.dmg}</td><td>$${r.cash ?? 0}</td></tr>`).join('')}
       </tbody></table>
       <div class="endnext">Yeni seviye üretiliyor: <span id="endcount">${data.next}</span> sn</div></div>`;
     e.classList.remove('hidden');
