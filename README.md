@@ -9,7 +9,8 @@ yerel ağda PvP. Harita her maçta tohumdan yeniden üretilir; model, doku ve se
 ```bash
 npm install
 npm start          # http://localhost:3000
-npm test           # ortak oyun çekirdeğinin testleri (botlarla tam maç simülasyonu dahil)
+npm test           # oyun çekirdeği + sunucu testleri (botlarla tam maç simülasyonu dahil)
+npm run desktop    # masaüstü (Electron) sürümü
 ```
 
 - **Çevrimdışı (botlara karşı):** Menüden mod (herkes herkese / takım çatışması), ışıklandırma (normal / loş / karartma),
@@ -19,6 +20,11 @@ npm test           # ortak oyun çekirdeğinin testleri (botlarla tam maç simü
   sunucuda da oynanır (ES modülleri `file://` üzerinden açılamaz, bir HTTP sunucusu şart).
 - **Çok oyunculu (PvP):** `npm start` konsolda yerel ağ adresini yazar (ör. `http://192.168.1.20:3000`).
   Arkadaşların bu adresi açıp `ÇOK OYUNCULU → SUNUCUYA KATIL` der. Boş yerleri botlar doldurur.
+
+- **Masaüstü sürümü (Steam / itch.io için):** `npm run desktop` — Electron penceresinde tam ekran açılır (F11 pencere
+  modu), oyun sunucusu uygulamanın içinde çalışır: tek oyunculu oynarken aynı anda yerel ağda host olursun, adres
+  `ÇOK OYUNCULU` panelinde görünür. Arka planda kısılma yoktur; `ÇIKIŞ` menüden kapatır. (`desktop/` klasörü kendi
+  `package.json`'ına sahiptir; tarayıcı sürümü Electron indirmez.)
 
 Sunucu ayarları (ortam değişkenleri): `PORT` (3000), `BOTS` (toplam katılımcı hedefi, 5), `DIFF` (0/1/2),
 `FRAGS` (leş / takım skor limiti, 25), `TIME` (maç süresi, saniye, 600), `MODE` (`ffa` veya `tdm`),
@@ -47,6 +53,22 @@ Aşağıdakiler varsayılanlardır.
 | 1 / 2 / 3, tekerlek | birincil / ikincil / bıçak |
 | Tab | skor tablosu |
 | Esc | duraklat (ayarlar oyun içinden de değişir) |
+
+### Gamepad (Xbox / PlayStation / Steam Deck)
+
+| Tuş | İşlev |
+| --- | --- |
+| Sol çubuk / sağ çubuk | hareket (analog yürüme) / bakış |
+| RT / LT | ateş / nişan al (bıçakta ağır saplama) |
+| A / B | zıpla / çömel |
+| X | bağlama göre: kutu aç · silah al, yoksa şarjör değiştir |
+| Y / LB | birincil ↔ ikincil / bıçak |
+| RB | el bombası (basılı tut: beklet) |
+| L3 / R3 | koş / silahı incele |
+| Yön yukarı / aşağı / sol-sağ | fener / atış modu / eğil |
+| View (basılı) / Menu | skor tablosu / duraklat |
+
+Atış, isabet alma ve patlamalar titreşimle hissedilir; nişangah düşmanın üzerindeyken bakış hafifçe yavaşlar.
 
 ## Silahlar
 
@@ -94,7 +116,8 @@ hareket bulanıklığı, parlaklık, FPS göstergesi), Ses (ana, efekt, ortam, a
 
 ## Teknik
 
-- `server.js` — statik dosya sunucusu + WebSocket (`/ws`), 30 Hz yetkili simülasyon.
+- `lib/server.js` — statik dosya sunucusu + WebSocket (`/ws`) + `/info` (LAN adresleri), 30 Hz yetkili simülasyon;
+  `server.js` (CLI) ve `desktop/main.cjs` (Electron) bunu kullanır.
 - `public/js/shared/` — sunucu ve istemcinin ortak kodu: harita üretimi, ışın izleme, çarpışma, yol bulma (`map.js`),
   silah verileri (`weapons.js`), deterministik el bombası fiziği (`physics.js`), oyun çekirdeği ve bot yapay zekası (`core.js`:
   envanter yuvaları, bıçak, el bombası, yere düşen silahlar, maç süresi/istatistikler; botlar kutu açar, silah toplar,

@@ -1,10 +1,11 @@
 {
   "name": "backrooms-bodycam",
   "version": "1.1.0",
-  "description": "Backrooms Level 0 bodycam-style browser FPS with PvP multiplayer and bots",
+  "description": "Backrooms Level 0 bodycam-style tactical FPS: bots, LAN PvP, team deathmatch; runs in the browser or as a desktop app",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "desktop": "npm --prefix desktop install && npm --prefix desktop start"
   },
   "keywords": [],
   "author": "",

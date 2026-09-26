@@ -13,6 +13,7 @@ import * as TX from './textures.js';
 import { Sound } from './audio.js';
 import { Net } from './net.js';
 import { Hud, esc } from './hud.js';
+import { Pad, BTN } from './gamepad.js';
 import { settings, saveSettings, buildSettingsPanel, buildControls, keyLabel, ALT_KEYS } from './settings.js';
 import { recordKill, recordDeath, recordMatch, addTime, saveCareer, careerHtml, resetCareer, randomTip } from './career.js';
 
@@ -104,6 +105,8 @@ class Game {
     this.mouse = { l: false, r: false, dx: 0, dy: 0 };
     this.fresh = { l: false, r: false };
     this.locked = false;
+    this.pad = new Pad();
+    this.padPaused = false;
     this.state = 'boot';
     this.remotes = new Map();
     this.names = new Map();
@@ -279,7 +282,8 @@ class Game {
     this.loading(false);
     this.sound.setHum?.(0.9);
     $('pause').classList.remove('hidden'); // hidden again once the pointer lock is granted
-    net.setPaused(true);                     // offline: the match starts when the pointer lock is granted
+    this.padPaused = false;
+    this.refreshPause(true);                 // offline: the match starts when the pointer lock is granted (or a gamepad is used)
     this.lock();
     this.sendT = 0; this.pingT = 0;
   }
@@ -368,19 +372,16 @@ class Game {
     document.addEventListener('keydown', resumeAudio);
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.canvas;
-      const paused = !this.locked && this.state === 'game';
-      $('pause').classList.toggle('hidden', !paused);
-      if (paused) this.showPauseMain();
-      this.net?.setPaused(paused);
-      if (!this.locked) { this.mouse.l = this.mouse.r = false; this.keys = {}; this.me.nadeHeld = false; }
+      if (!this.locked) { this.mouse.l = this.mouse.r = false; this.keys = {}; this.me.nadeHeld = false; this.pad.active = false; this.padPaused = false; }
+      this.refreshPause(true);
     });
     document.addEventListener('pointerlockerror', () => { if (this.state === 'game') $('pause').classList.remove('hidden'); });
-    document.addEventListener('visibilitychange', () => { if (this.state === 'game') this.net?.setPaused(document.hidden || !this.locked); });
+    document.addEventListener('visibilitychange', () => { if (this.state === 'game') this.net?.setPaused(document.hidden || this.isPaused()); });
     // Ctrl is crouch: guard against Ctrl+W closing the tab mid-match
     window.addEventListener('beforeunload', (e) => { saveCareer(); if (this.state === 'game' && !this.quitting) { e.preventDefault(); e.returnValue = ''; } });
     window.addEventListener('pagehide', () => saveCareer());
     this.canvas.addEventListener('click', () => this.lock());
-    $('btnResume').onclick = () => this.lock();
+    $('btnResume').onclick = () => { if (this.pad.active) { this.padPaused = false; this.refreshPause(); } else this.lock(); };
     $('btnQuit').onclick = () => { this.sound.ui('ui_click', 0.5); this.quitToMenu(); };
     $('btnPauseSettings').onclick = () => { $('settingsPause').appendChild($('settingsBox')); $('pauseMain').classList.add('hidden'); $('pauseSettings').classList.remove('hidden'); };
     $('btnPauseBack').onclick = () => this.showPauseMain();
@@ -440,6 +441,56 @@ class Game {
     return null;
   }
   down(a) { if (this.keys[settings.binds[a]]) return true; const alt = ALT_KEYS[a]; return !!alt && alt.some((c) => this.keys[c]); }
+  // paused = no mouse lock and no gamepad in use, or paused from the gamepad's Menu button
+  isPaused() { return this.state === 'game' && (this.padPaused || (!this.locked && !this.pad.active)); }
+  refreshPause(reset) {
+    const paused = this.isPaused();
+    const el = $('pause'), was = !el.classList.contains('hidden');
+    el.classList.toggle('hidden', !paused);
+    if (paused && (!was || reset)) this.showPauseMain();
+    this.net?.setPaused(paused);
+  }
+  fireHeld() { return this.mouse.l || this.padFire; }
+  aimHeld() { return this.mouse.r || this.padAim; }
+
+  updatePad(dt) {
+    const P = this.pad, was = P.active;
+    if (!P.poll()) { this.padMove = null; this.padFire = this.padAim = false; return; }
+    const me = this.me;
+    if (P.pressed(BTN.MENU)) { if (this.isPaused()) { this.padPaused = false; P.active = true; } else this.padPaused = true; }
+    if (!was || P.pressed(BTN.MENU)) this.refreshPause();
+    if (P.pressed(BTN.VIEW)) { this.scoreOpen = true; this.renderScore(); }
+    if (P.released(BTN.VIEW)) { this.scoreOpen = false; this.hud.scoreboard(false); }
+    if (this.isPaused()) { this.padMove = null; this.padFire = this.padAim = false; return; }
+    this.padMove = [P.lx, P.ly];
+    // look: quadratic response, scaled like the mouse on the sights, light friction over enemies
+    const zoom = this.camera.fov / settings.fov, friction = this.aimOnFoe ? 0.6 : 1;
+    const k = settings.sens * zoom * (me.ads > 0.5 ? settings.adsSens : 1) * friction;
+    const cx = Math.sign(P.rx) * P.rx * P.rx, cy = Math.sign(P.ry) * P.ry * P.ry;
+    if (me.alive) {
+      me.yaw -= cx * 3.4 * k * dt;
+      me.pitch = clamp(me.pitch - cy * 2.4 * k * dt * (settings.invertY ? -1 : 1), -1.45, 1.45);
+    }
+    this.mouse.dx += cx * 900 * dt * k; this.mouse.dy += cy * 700 * dt * k; // weapon sway follows the stick
+    const fire = P.rt > 0.5, aim = P.lt > 0.4;
+    if (fire && !this.padFire) this.fresh.l = true;
+    if (aim && !this.padAim) { this.fresh.r = true; me.adsToggle = !me.adsToggle; }
+    this.padFire = fire; this.padAim = aim;
+    if (P.pressed(BTN.A)) this.padJump = true;
+    if (P.pressed(BTN.B)) me.padCrouch = !me.padCrouch;
+    if (P.pressed(BTN.L3)) me.padSprint = !me.padSprint;
+    this.padLean = (P.down[BTN.RIGHT] ? 1 : 0) - (P.down[BTN.LEFT] ? 1 : 0);
+    if (!me.alive) return;
+    if (P.pressed(BTN.X)) { if (this.nearDrop || this.nearCrate >= 0) this.interact(); else this.startReload(); }
+    if (P.pressed(BTN.Y)) this.equip(me.slot === 'primary' || !me.inv.primary ? 'secondary' : 'primary');
+    if (P.pressed(BTN.LB)) this.equip(me.slot === 'melee' ? (me.inv.primary ? 'primary' : 'secondary') : 'melee');
+    if (P.pressed(BTN.RB)) this.nadePress();
+    if (P.released(BTN.RB)) me.nadeHeld = false;
+    if (P.pressed(BTN.R3)) this.inspect();
+    if (P.pressed(BTN.UP)) { me.flash = !me.flash; this.sound.ui('ui_click', 0.35); }
+    if (P.pressed(BTN.DOWN)) this.cycleMode();
+  }
+
   showPauseMain() {
     $('pauseMain').classList.remove('hidden'); $('pauseSettings').classList.add('hidden');
   }
@@ -766,6 +817,7 @@ class Game {
     if (m.zone !== 'x') this.sound.hurt(m.zone, m.dmg);
     else this.sound.ui('hurt', 0.8);
     if (m.by !== this.myId) this.hud.damage(rel, m.dmg);
+    this.pad.rumble(0.35 + m.dmg / 80, 0.3, 140 + m.dmg * 3);
     this.post.final.uniforms.uFlash.value = Math.max(this.post.final.uniforms.uFlash.value, head ? 0.25 : 0);
   }
 
@@ -875,6 +927,7 @@ class Game {
     this.boomLight.intensity = 90;
     const k = clamp(1 - dist / 16, 0, 1) * (occl ? 0.4 : 1);
     this.me.trauma = Math.min(1, this.me.trauma + k * 1.1);
+    if (k > 0.05) this.pad.rumble(k, k * 0.8, 200 + k * 400);
     const u = this.post.final.uniforms;
     if (!occl) u.uFlash.value = Math.max(u.uFlash.value, clamp(1 - dist / 12, 0, 1) * 1.6);
   }
@@ -1012,6 +1065,7 @@ class Game {
     me.kickY += hd;
     me.yaw += hd * 0.6;
     const fl = FEEL[type];
+    this.pad.rumble(0.1 + fl.cam * 1.4, 0.25 + fl.cam, 50 + fl.cam * 220);
     this.vm.kick(type, me.ads);
     me.trauma = Math.min(1, me.trauma + fl.cam);
     me.fovPunch += fl.fov;
@@ -1056,6 +1110,7 @@ class Game {
       }
       this.vm.bump(-3, 0.3);
       me.trauma = Math.min(1, me.trauma + 0.12);
+      this.pad.rumble(0.45, 0.3, 90);
       return;
     }
     const d = this.dir.set(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
@@ -1135,6 +1190,7 @@ class Game {
     this.updateClock(dt);
     this.runEvents();
 
+    this.updatePad(dt);
     this.updatePlayer(dt);
     this.updateWeapon(dt);
     this.updateCamera(dt);
@@ -1212,9 +1268,14 @@ class Game {
     me.trauma = Math.max(0, me.trauma - dt * 1.8);
     if (!me.alive) { me.deathT = Math.min(1, me.deathT + dt * 1.6); me.vel.set(0, 0, 0); this.nearCrate = -1; this.nearDrop = null; return; }
     const w = WEAPONS[this.curType()];
-    const f = (this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0), s = (this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0);
-    me.crouch = settings.holdCrouch ? this.down('crouch') : !!me.crouchToggle;
-    const shift = this.down('sprint');
+    const pm = this.padMove;
+    const f = clamp((this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0) - (pm ? pm[1] : 0), -1, 1);
+    const s = clamp((this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0) + (pm ? pm[0] : 0), -1, 1);
+    const stick = pm ? Math.min(1, Math.hypot(pm[0], pm[1])) : 0;
+    if (me.padSprint && (!pm || pm[1] > -0.5)) me.padSprint = false; // stick sprint ends when you stop pushing forward
+    me.crouch = (settings.holdCrouch ? this.down('crouch') : !!me.crouchToggle) || !!me.padCrouch;
+    if (me.crouch && me.padSprint) me.padCrouch = false;
+    const shift = this.down('sprint') || !!me.padSprint;
     if (me.exhausted && me.stamina > 0.3) me.exhausted = false;
     me.sprint = shift && f > 0 && !me.crouch && me.ads < 0.3 && me.onGround && !me.reloading && !me.exhausted && !(this.vm.animName || '').startsWith('knife');
     if (me.sprint) {
@@ -1226,7 +1287,7 @@ class Game {
     me.holdBreath = scoped && shift && me.breath > 0;
     if (me.holdBreath) me.breath = Math.max(0, me.breath - dt / 4.5); else me.breath = Math.min(1, me.breath + dt / (scoped ? 6 : 2.5));
     // lean (Q/E): camera slides sideways around cover, limited by nearby walls
-    const leanT = me.sprint ? 0 : (this.down('leanR') ? 1 : 0) - (this.down('leanL') ? 1 : 0);
+    const leanT = me.sprint ? 0 : clamp((this.down('leanR') ? 1 : 0) - (this.down('leanL') ? 1 : 0) + (this.padLean || 0), -1, 1);
     me.lean = damp(me.lean, leanT, 9, dt);
     if (Math.abs(me.lean) > 0.01) {
       const sgn = Math.sign(me.lean), rx = Math.cos(me.yaw) * sgn, rz = -Math.sin(me.yaw) * sgn;
@@ -1234,6 +1295,7 @@ class Game {
       me.leanOff = me.lean * Math.min(0.4, room);
     } else me.leanOff = 0;
     let speed = me.crouch ? 1.8 : me.sprint ? 5.6 : 3.3;
+    if (stick > 0 && !this.down('forward') && !this.down('back') && !this.down('left') && !this.down('right')) speed *= Math.max(0.35, stick); // analog walk
     speed *= (w.moveMul || 1) * (1 - me.ads * 0.35) * (1 - Math.abs(me.lean) * 0.35);
     const sy = Math.sin(me.yaw), cy = Math.cos(me.yaw);
     let wx = -sy * f + cy * s, wz = -cy * f - sy * s;
@@ -1242,7 +1304,9 @@ class Game {
     const acc = me.onGround ? 11 : 1.5;
     me.vel.x = damp(me.vel.x, wx, acc, dt);
     me.vel.z = damp(me.vel.z, wz, acc, dt);
-    if (this.down('jump') && me.onGround && !me.crouch && me.stamina > 0.08) { me.vy = 3.9; me.onGround = false; me.stamina -= 0.08; me.stamRegen = 0.9; }
+    const jump = this.down('jump') || this.padJump;
+    this.padJump = false;
+    if (jump && me.onGround && !me.crouch && me.stamina > 0.08) { me.vy = 3.9; me.onGround = false; me.stamina -= 0.08; me.stamRegen = 0.9; }
     me.vy -= 13 * dt;
     me.pos.y += me.vy * dt;
     if (me.pos.y <= 0) {
@@ -1306,7 +1370,7 @@ class Game {
     for (const L of this.remoteLights) L.intensity = Math.max(0, L.intensity - dt * 400);
     const an = this.vm.animName;
     // ADS
-    const wantAds = settings.holdAds ? this.mouse.r : me.adsToggle;
+    const wantAds = settings.holdAds ? this.aimHeld() : me.adsToggle;
     const blockAds = !me.alive || me.sprint || w.melee || me.reloading || (an && (an === 'holster' || an.startsWith('nade') || an === 'inspect' || (an === 'bolt')));
     me.ads = damp(me.ads, wantAds && !blockAds ? 1 : 0, w.scope ? 11 : 14, dt);
     if (!settings.holdAds && (blockAds && (me.sprint || w.melee))) me.adsToggle = false;
@@ -1322,12 +1386,12 @@ class Game {
       if (me.cookT >= GRENADE.fuse - 0.02) { me.cookT = GRENADE.fuse; this.throwNade(); this.vm.play('nade_throw', 0.45); }
       else if (!me.nadeHeld && an === 'nade_hold') this.vm.play('nade_throw', 0.45);
     }
-    if (!me.alive || !this.locked || this.endData) return;
+    if (!me.alive || this.isPaused() || this.endData) return;
     // knife
     if (w.melee) {
       if (!an || an === 'inspect') {
         if (this.fresh.r) this.melee(true);
-        else if (this.mouse.l) this.melee(false);
+        else if (this.fireHeld()) this.melee(false);
       }
       return;
     }
@@ -1336,11 +1400,11 @@ class Game {
     const press = this.time - (me.trigQ ?? -9) < 0.18;
     // shotgun: pressing fire during a shell reload stops after the current shell
     if (me.reloading && w.shell && this.fresh.l && s.mag > 0) me.wantFire = true;
-    if (an === 'inspect' && (this.fresh.l || this.mouse.r)) this.vm.stop();
+    if (an === 'inspect' && (this.fresh.l || this.aimHeld())) this.vm.stop();
     const ready = !this.vm.animName && !me.reloading && !me.cycling && !s.needsCycle && me.sprintK < 0.35;
     if (!ready) { if (this.fresh.l && !this.vm.animName && s.mag === 0 && !me.reloading) this.startReload(); return; }
     if (press && s.mode === 'burst' && me.burst <= 0) { me.burst = 3; me.trigQ = -9; }
-    const want = s.mode === 'auto' ? this.mouse.l : s.mode === 'burst' ? me.burst > 0 : press;
+    const want = s.mode === 'auto' ? this.fireHeld() : s.mode === 'burst' ? me.burst > 0 : press;
     if (!want) return;
     let shots = 0;
     while (me.fireT <= 0 && shots < 4) {
@@ -1530,10 +1594,11 @@ class Game {
       hud.slots(me.inv, me.pendingSlot || me.slot);
       hud.crosshair(settings.xhair && me.ads < 0.5 && me.alive);
       hud.protect(me.alive && this.time < me.protectUntil);
+      const useKey = this.pad.active && !this.locked ? 'X' : keyLabel(settings.binds.use);
       if (this.nearDrop && me.alive) {
         const W = WEAPONS[this.nearDrop.w], held = me.inv[W.slot];
-        hud.prompt(`<b>[${keyLabel(settings.binds.use)}]</b> ${esc(W.label)} al${held && held.w !== this.nearDrop.w ? ` <span style="opacity:.6">(${esc(WEAPONS[held.w].short)} bırakılır)</span>` : ''}`);
-      } else if (this.nearCrate >= 0 && me.alive) hud.prompt(`<b>[${keyLabel(settings.binds.use)}]</b> Kutuyu aç`);
+        hud.prompt(`<b>[${useKey}]</b> ${esc(W.label)} al${held && held.w !== this.nearDrop.w ? ` <span style="opacity:.6">(${esc(WEAPONS[held.w].short)} bırakılır)</span>` : ''}`);
+      } else if (this.nearCrate >= 0 && me.alive) hud.prompt(`<b>[${useKey}]</b> Kutuyu aç`);
       else hud.prompt(null);
       if (!me.alive) hud.respawn(Math.max(0, RESPAWN_T - (this.time - me.deathAt)));
       if (this.scoreOpen) this.renderScore();
@@ -1542,6 +1607,7 @@ class Game {
         const cam = this.camera, dir = this.v1.set(0, 0, -1).applyQuaternion(cam.quaternion);
         const res = this.trace(cam.position, dir, 40);
         hud.aimName(res.kind === 'player' ? this.names.get(res.id)?.name || '' : '', res.kind === 'player' && this.isFriend(res.id));
+        this.aimOnFoe = res.kind === 'player' && !this.isFriend(res.id);
       } else hud.aimName('');
     }
     hud.cook(me.cooking ? me.cookT / GRENADE.fuse : 0);
@@ -1571,16 +1637,20 @@ buildSettingsPanel($('settingsBox'), (k) => game.onSetting(k));
 $('controlsBox').classList.add('controlsHost');
 buildControls($('controlsBox'), (k) => game.onSetting(k));
 $('settingsHome').appendChild($('settingsBox'));
-for (const b of document.querySelectorAll('#nav button')) {
+for (const b of document.querySelectorAll('#nav button[data-p]')) {
   b.onclick = () => {
     game.sound.resume();
     game.sound.ui('ui_click', 0.4);
-    document.querySelectorAll('#nav button').forEach((x) => x.classList.toggle('on', x === b));
+    document.querySelectorAll('#nav button[data-p]').forEach((x) => x.classList.toggle('on', x === b));
     document.querySelectorAll('.menu-right .panel').forEach((p) => p.classList.toggle('hidden', p.id !== 'p-' + b.dataset.p));
     if (b.dataset.p === 'settings') $('settingsHome').appendChild($('settingsBox'));
     if (b.dataset.p === 'profile') $('careerBox').innerHTML = careerHtml();
   };
   b.onmouseenter = () => game.sound.ui('ui_hover', 0.3);
+}
+if (location.search.includes('desktop')) {
+  $('btnExit').classList.remove('hidden');
+  $('btnExit').onclick = () => { saveCareer(); window.close(); };
 }
 $('bots').value = settings.bots; $('botsv').textContent = settings.bots;
 $('diff').value = settings.diff; $('frags').value = settings.frags; $('mtime').value = settings.time; $('gmode').value = settings.mode;
@@ -1598,10 +1668,12 @@ let onlineOk = false;
 $('btnOffline').onclick = () => game.start('offline');
 $('btnOnline').onclick = () => { if (onlineOk) game.start('online'); };
 if (location.protocol.startsWith('http')) {
-  Net.online(1500).then((n) => {
+  Net.online(1500).then(async (n) => {
     n.close(); onlineOk = true;
-    $('onlineInfo').textContent = `Sunucu aktif: ${location.host} — arkadaşların aynı adresi açarak katılabilir.`;
     $('btnOnline').disabled = false;
+    let lan = [];
+    try { const info = await (await fetch('/info')).json(); lan = info.lan.map((ip) => `http://${ip}:${info.port}`); } catch { /* older server */ }
+    $('onlineInfo').innerHTML = `Sunucu aktif. Aynı ağdaki arkadaşların şu adresi açarak katılabilir:<br><b class="addr">${esc(lan[0] || location.origin)}</b>${lan.length > 1 ? `<br><span class="small">${lan.slice(1).map(esc).join(' · ')}</span>` : ''}`;
   }).catch(() => { $('onlineInfo').textContent = 'Sunucu bulunamadı. Çok oyunculu için "npm start" ile sunucuyu başlat.'; });
 } else $('onlineInfo').textContent = 'Dosyadan açıldı. Çok oyunculu için "npm start" ile sunucuyu başlat.';
 game.boot().catch((e) => { console.error(e); $('loadtext').textContent = 'Başlatma hatası: ' + e.message; });

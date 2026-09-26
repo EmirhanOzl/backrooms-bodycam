@@ -193,3 +193,4 @@ table.keys .alt { font-size: 11px; opacity: 0.55; margin-left: 4px; }
 .stat span { font-size: 10px; opacity: 0.6; letter-spacing: 0.12em; }
 #loadtip { margin-top: 18px; font-size: 12px; opacity: 0.55; line-height: 1.5; min-height: 36px; }
 @media (max-width: 760px) { .stats { grid-template-columns: repeat(3, 1fr); } }
+.addr { color: var(--acc); font-size: 15px; user-select: text; }
