@@ -24,9 +24,10 @@ export class Net {
     });
   }
 
-  static offline(opts) {
+  // useWorker=false keeps the simulation on this thread (debugging / automated tests: net.core is reachable)
+  static offline(opts, useWorker = true) {
     const n = new Net();
-    try {
+    if (useWorker) try {
       const w = new Worker(new URL('./core-worker.js', import.meta.url), { type: 'module' });
       w.onmessage = (e) => { for (const m of e.data) n.queue.push(m); };
       w.onerror = (e) => { console.error('offline core crashed', e); n.closed = true; };
@@ -37,7 +38,7 @@ export class Net {
     } catch (e) {
       console.warn('worker unavailable, simulating on the main thread', e);
     }
-    const core = new GameCore(opts);
+    const core = (n.core = new GameCore(opts));
     core.join('me', (m) => n.queue.push(m));
     n.send = (m) => core.handle('me', m);
     let last = performance.now();

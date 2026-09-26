@@ -109,7 +109,7 @@ class Game {
     this.events = [];
     this.predHits = new Map();
     this.time = 0;
-    this.clockOff = null;
+    this.srv = null; this.lastSnapT = null;
     this.cidSeq = 0;
     this.v1 = new THREE.Vector3(); this.v2 = new THREE.Vector3(); this.v3 = new THREE.Vector3(); this.v4 = new THREE.Vector3();
     this.fwd = new THREE.Vector3(); this.rgt = new THREE.Vector3(); this.upv = new THREE.Vector3(); this.dir = new THREE.Vector3();
@@ -226,7 +226,7 @@ class Game {
     let net;
     try {
       net = mode === 'online' ? await Net.online(4000)
-        : Net.offline({ bots: settings.bots + 1, difficulty: settings.diff, fragLimit: settings.frags, timeLimit: settings.time * 60 });
+        : Net.offline({ bots: settings.bots + 1, difficulty: settings.diff, fragLimit: settings.frags, timeLimit: settings.time * 60 }, !location.search.includes('noworker'));
     } catch {
       this.loadProgress('Sunucuya bağlanılamadı.', 0);
       setTimeout(() => this.loading(false), 1600);
@@ -246,7 +246,7 @@ class Game {
     this.fragLimit = welcome.fragLimit;
     this.timeLimit = welcome.timeLimit;
     this.tl = welcome.timeLimit; this.tlAt = this.time;
-    this.clockOff = null;
+    this.srv = null; this.lastSnapT = null;
     this.loadProgress('Seviye 0\'a noclip yapılıyor…', 0.45);
     await nextFrame();
     this.loadLevel(welcome.seed, welcome.size);
@@ -560,7 +560,14 @@ class Game {
   }
 
   // ------------------------------------------------------------------ messages
-  serverNow() { return this.clockOff == null ? 0 : performance.now() / 1000 - this.clockOff; }
+  // Server clock estimate, anchored to the newest snapshot (robust to tick/frame hitches and tab throttling)
+  serverNow() { return this.srv ?? 0; }
+  updateClock(dt) {
+    if (this.lastSnapT == null) return;
+    const est = this.lastSnapT + Math.min(0.25, performance.now() / 1000 - this.lastSnapAt);
+    if (this.srv == null || Math.abs(est - this.srv) > 0.5) this.srv = est;
+    else this.srv += dt + (est - this.srv) * Math.min(1, dt * 5);
+  }
   schedule(ts, fn) {
     const due = ts + INTERP;
     this.events.push({ due, fn });
@@ -584,9 +591,7 @@ class Game {
         return;
       }
       case 'snap': {
-        const sample = performance.now() / 1000 - m.st;
-        if (this.clockOff == null || sample < this.clockOff || sample - this.clockOff > 1) this.clockOff = sample;
-        else this.clockOff += (sample - this.clockOff) * 0.02;
+        if (this.lastSnapT == null || m.st >= this.lastSnapT) { this.lastSnapT = m.st; this.lastSnapAt = performance.now() / 1000; }
         this.tl = m.tl; this.tlAt = this.time;
         for (const s of m.ps) {
           const [id, x, y, z, yaw, pitch, f, w, hp, ar, k, d, hs] = s;
@@ -1069,8 +1074,9 @@ class Game {
     const dt = clamp((now - this.last) / 1000, 0, 0.05);
     this.last = now;
     this.time += dt;
-    this.fpsT = (this.fpsT || 0) + dt; this.fpsN = (this.fpsN || 0) + 1;
-    if (this.fpsT >= 0.5) { this.fps = Math.round(this.fpsN / this.fpsT); this.fpsT = 0; this.fpsN = 0; this.hud.fps(settings.fps, this.fps); }
+    this.fpsN = (this.fpsN || 0) + 1;
+    if (!this.fpsAt) this.fpsAt = now;
+    if (now - this.fpsAt >= 500) { this.fps = Math.round((this.fpsN * 1000) / (now - this.fpsAt)); this.fpsAt = now; this.fpsN = 0; this.hud.fps(settings.fps, this.fps); }
     if (this.state === 'menu' || this.state === 'boot') {
       if (this.map) {
         this.updateAttract(dt);
@@ -1087,6 +1093,7 @@ class Game {
     if (this.state !== 'game') return;
     for (const m of this.net.poll()) this.onMsg(m);
     if (this.net.closed && !this.lostShown) { this.lostShown = true; this.hud.banner('SUNUCU BAĞLANTISI KOPTU'); }
+    this.updateClock(dt);
     this.runEvents();
 
     this.updatePlayer(dt);
@@ -1284,18 +1291,21 @@ class Game {
       }
       return;
     }
+    // semi-auto clicks are buffered briefly so a click during the cooldown / pump / bolt is not lost
+    if (this.fresh.l) me.trigQ = this.time;
+    const press = this.time - (me.trigQ ?? -9) < 0.18;
     // shotgun: pressing fire during a shell reload stops after the current shell
     if (me.reloading && w.shell && this.fresh.l && s.mag > 0) me.wantFire = true;
     if (an === 'inspect' && (this.fresh.l || this.mouse.r)) this.vm.stop();
     const ready = !this.vm.animName && !me.reloading && !me.cycling && !s.needsCycle && me.sprintK < 0.35;
     if (!ready) { if (this.fresh.l && !this.vm.animName && s.mag === 0 && !me.reloading) this.startReload(); return; }
-    if (this.fresh.l && s.mode === 'burst' && me.burst <= 0) me.burst = 3;
-    const want = s.mode === 'auto' ? this.mouse.l : s.mode === 'burst' ? me.burst > 0 : this.fresh.l;
+    if (press && s.mode === 'burst' && me.burst <= 0) { me.burst = 3; me.trigQ = -9; }
+    const want = s.mode === 'auto' ? this.mouse.l : s.mode === 'burst' ? me.burst > 0 : press;
     if (!want) return;
     let shots = 0;
     while (me.fireT <= 0 && shots < 4) {
       if (s.mag <= 0) {
-        if (this.fresh.l) { this.sound.mech('dry', 0.5); this.startReload(); }
+        if (press || this.fresh.l) { this.sound.mech('dry', 0.5); this.startReload(); me.trigQ = -9; }
         me.burst = 0;
         break;
       }
@@ -1303,7 +1313,7 @@ class Game {
       shots++;
       me.fireT += 60 / w.rpm;
       if (s.mode === 'burst') { if (--me.burst <= 0) { me.fireT += 0.12; break; } }
-      else if (s.mode !== 'auto') break;
+      else if (s.mode !== 'auto') { me.trigQ = -9; break; }
       if (this.vm.animName) break;
     }
   }

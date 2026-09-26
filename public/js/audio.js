@@ -178,10 +178,11 @@ export class Sound {
     const near = dist < 32;
     this.play(near ? 'gr_boom' : 'gr_far', { cat: 'boom', pos, vol: near ? 1.4 : 1.2, ref: near ? 7 : 20, rolloff: 0.9, occl, verb: 0.9, jitter: 0.02 });
     if (dist < 9 && !occl) {
+      // the blast itself is heard at full level; the ears shut down right after it
       const k = 1 - dist / 9;
-      this.deafen(600 + (1 - k) * 2500, 1.2 + k * 2.5);
-      this.duckSfx(1 - k * 0.7, 2 + k * 2);
-      if (k > 0.35) this.tinnitus(1.5 + k * 3, 0.045 * k);
+      this.deafen(600 + (1 - k) * 2500, 1.2 + k * 2.5, 0.07);
+      this.duckSfx(1 - k * 0.7, 2 + k * 2, 0.09);
+      if (k > 0.35) this.tinnitus(1.5 + k * 3, 0.045 * k, 0.1);
     }
   }
 
@@ -192,19 +193,24 @@ export class Sound {
     if (zone === 'h') this.tinnitus(2.6, 0.05);
   }
 
-  deafen(freq, sec) {
+  deafen(freq, sec, delay = 0) {
     if (!this.ctx) return;
-    const f = this.muffle.frequency, t = this.ctx.currentTime;
-    f.cancelScheduledValues(t); f.setValueAtTime(Math.min(f.value, freq), t); f.exponentialRampToValueAtTime(20000, t + sec);
+    const f = this.muffle.frequency, now = this.ctx.currentTime, t = now + delay, v = Math.max(20, f.value);
+    const target = Math.min(v, freq);
+    f.cancelScheduledValues(now); f.setValueAtTime(v, now);
+    if (delay > 0) f.setValueAtTime(v, t);
+    f.exponentialRampToValueAtTime(target, t + 0.03); f.exponentialRampToValueAtTime(20000, t + 0.03 + sec);
   }
-  duckSfx(level, sec) {
+  duckSfx(level, sec, delay = 0) {
     if (!this.ctx) return;
-    const g = this.duck.gain, t = this.ctx.currentTime;
-    g.cancelScheduledValues(t); g.setValueAtTime(Math.min(g.value, level), t); g.linearRampToValueAtTime(1, t + sec);
+    const g = this.duck.gain, now = this.ctx.currentTime, t = now + delay, v = g.value;
+    g.cancelScheduledValues(now); g.setValueAtTime(v, now);
+    if (delay > 0) g.setValueAtTime(v, t);
+    g.linearRampToValueAtTime(Math.min(v, level), t + 0.04); g.linearRampToValueAtTime(1, t + 0.04 + sec);
   }
-  tinnitus(sec, vol) {
+  tinnitus(sec, vol, delay = 0) {
     if (!this.ctx) return;
-    const ctx = this.ctx, t = ctx.currentTime;
+    const ctx = this.ctx, t = ctx.currentTime + delay;
     const o = ctx.createOscillator(); o.frequency.value = 3800 + Math.random() * 500;
     const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol * this.vol.master, t + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, t + sec);
     o.connect(g).connect(this.post); o.start(t); o.stop(t + sec + 0.05);
