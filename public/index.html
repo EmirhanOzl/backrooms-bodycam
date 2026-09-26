@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BACKROOMS: BODYCAM</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <!-- Bodycam overlay -->
+  <div id="hud" class="hidden">
+    <div id="stamp">
+      <div><span id="rec">●</span> <span id="clock">0000-00-00 00:00:00</span> <span class="tz">+0300</span></div>
+      <div>AXON BODY 4 <span id="serial">X6039B1A</span></div>
+    </div>
+    <div id="feed"></div>
+    <div id="xhair"></div>
+    <div id="hitmark"><i></i><i></i><i></i><i></i></div>
+    <div id="dmgdir"></div>
+    <div id="aimname"></div>
+    <div id="prompt"></div>
+    <div id="toasts"></div>
+    <div id="vitals">
+      <div class="bar"><label>SAĞLIK</label><div class="track"><div id="hpbar"></div></div><span id="hp">100</span></div>
+      <div class="bar"><label>ZIRH</label><div class="track"><div id="arbar"></div></div><span id="ar">0</span></div>
+    </div>
+    <div id="weapon">
+      <div id="wname">G17 TABANCA</div>
+      <div id="ammo"><span id="mag">15</span><span class="sep">/</span><span id="res">45</span></div>
+      <div id="slots"></div>
+    </div>
+    <div id="kd"></div>
+    <div id="banner"></div>
+    <div id="death" class="hidden"><div class="t">BAĞLANTI KESİLDİ</div><div id="killer"></div><div id="respawn"></div></div>
+    <div id="score" class="hidden"><h2>SKOR TABLOSU</h2><table><thead><tr><th>OYUNCU</th><th>LEŞ</th><th>ÖLÜM</th></tr></thead><tbody id="scorebody"></tbody></table><div id="fraglimit"></div></div>
+  </div>
+
+  <!-- Menu -->
+  <div id="menu">
+    <div class="panel">
+      <div class="logo">BACKROOMS<span>: BODYCAM</span></div>
+      <div class="sub">SEVİYE 0 — "LOBİ" · 600 milyon m² nemli halı · 60 Hz floresan uğultusu</div>
+      <div class="row"><label>Operatör adı</label><input id="name" maxlength="16" value="Gezgin"></div>
+      <div class="cols">
+        <div class="col">
+          <h3>ÇOK OYUNCULU</h3>
+          <p id="onlineInfo">Sunucu kontrol ediliyor…</p>
+          <button id="btnOnline" disabled>SUNUCUYA KATIL</button>
+        </div>
+        <div class="col">
+          <h3>ÇEVRİMDIŞI · BOTLARA KARŞI</h3>
+          <div class="row"><label>Bot sayısı</label><input id="bots" type="range" min="1" max="11" value="6"><span id="botsv">6</span></div>
+          <div class="row"><label>Zorluk</label><select id="diff"><option value="0">Kolay</option><option value="1" selected>Normal</option><option value="2">Zor</option></select></div>
+          <button id="btnOffline">OYNA</button>
+        </div>
+      </div>
+      <details>
+        <summary>AYARLAR</summary>
+        <div class="row"><label>Fare hassasiyeti</label><input id="sens" type="range" min="0.2" max="3" step="0.05" value="1"><span id="sensv">1.00</span></div>
+        <div class="row"><label>Grafik</label><select id="quality"><option value="0">Düşük (hızlı)</option><option value="1" selected>Orta</option><option value="2">Yüksek</option></select></div>
+        <div class="row"><label>Nişangah noktası</label><input id="xhairOpt" type="checkbox" checked></div>
+        <div class="row"><label>Ses</label><input id="vol" type="range" min="0" max="1" step="0.05" value="0.8"></div>
+      </details>
+      <div class="keys">
+        <b>WASD</b> hareket · <b>SHIFT</b> koş · <b>CTRL / C</b> çömel · <b>Q / E</b> sola / sağa eğil · <b>SPACE</b> zıpla · <b>SOL TIK</b> ateş · <b>SAĞ TIK</b> nişan ·
+        <b>R</b> şarjör · <b>F</b> kutu aç · <b>T</b> fener · <b>1-4 / tekerlek</b> silah · <b>TAB</b> skor · <b>ESC</b> duraklat
+      </div>
+      <div id="loading" class="hidden">Seviye 0'a noclip yapılıyor… <span id="loadpct">0%</span></div>
+    </div>
+  </div>
+
+  <div id="pause" class="hidden"><div class="panel small"><h2>DURAKLATILDI</h2><p>Devam etmek için tıkla</p><button id="btnResume">DEVAM</button><button id="btnQuit" class="ghost">ANA MENÜ</button></div></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

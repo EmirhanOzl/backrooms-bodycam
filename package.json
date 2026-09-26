@@ -1,0 +1,16 @@
+{
+  "name": "backrooms-bodycam",
+  "version": "1.0.0",
+  "description": "Backrooms Level 0 bodycam-style browser FPS with PvP multiplayer and bots",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "three": "^0.186.1",
+    "ws": "^8.21.3"
+  }
+}
