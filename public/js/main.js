@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { generateMap, CEIL, CRATE_H, raycast, lineOfSight, collide, hitNormal, findPath, cellCenter } from './shared/map.js';
 import { WEAPONS, WEAPON_ORDER, GRENADE, dmgAt, zoneMul, meleeDamage } from './shared/weapons.js';
-import { PLAYER_R, EYE_STAND, EYE_CROUCH, HEAD_STAND, HEAD_CROUCH, HEAD_R, BODY_R, MAX_HP, F, RESPAWN_T, PROTECT_T } from './shared/core.js';
+import { PLAYER_R, EYE_STAND, EYE_CROUCH, HEAD_STAND, HEAD_CROUCH, HEAD_R, BODY_R, MAX_HP, F, RESPAWN_T, PROTECT_T, TEAM_NAMES } from './shared/core.js';
 import { NADE_STEP, makeNade, stepNade, throwVelocity } from './shared/physics.js';
 import { buildWorld, bakeMaterial } from './world.js';
 import { gunMaterials, Soldier, mergedGunGeometry } from './models.js';
@@ -13,7 +13,8 @@ import * as TX from './textures.js';
 import { Sound } from './audio.js';
 import { Net } from './net.js';
 import { Hud, esc } from './hud.js';
-import { settings, saveSettings, buildSettingsPanel, controlsTable } from './settings.js';
+import { settings, saveSettings, buildSettingsPanel, buildControls, keyLabel, ALT_KEYS } from './settings.js';
+import { recordKill, recordDeath, recordMatch, addTime, saveCareer, careerHtml, resetCareer, randomTip } from './career.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -28,7 +29,7 @@ const INTERP = 0.1;       // remote players are rendered this far in the past (s
 const LOOKAHEAD = 0.03;   // remote events are scheduled on the audio clock slightly ahead for jitter-free rhythm
 const LOCAL_LAT = 0.02;   // constant latency on our own gunshots keeps full-auto rhythm perfectly even at any fps
 const STREAKS = { 2: 'ÇİFTE LEŞ', 3: 'ÜÇLÜ LEŞ', 5: 'DURDURULAMAZ', 7: 'EFSANEVİ', 10: 'SEVİYE 0\'IN KABUSU' };
-const SLOT_KEYS = { Digit1: 'primary', Digit2: 'secondary', Digit3: 'melee' };
+const SLOT_ACTIONS = { slot1: 'primary', slot2: 'secondary', slot3: 'melee' };
 const SLOT_ORDER = ['primary', 'secondary', 'melee'];
 const SHELL_KIND = { pistol: 'pistol', smg: 'pistol', rifle: 'rifle', m4: 'rifle', sniper: 'rifle', shotgun: 'hull' };
 
@@ -158,6 +159,7 @@ class Game {
   }
 
   loading(on, text, p, cancel = false) {
+    if (on && $('loading').classList.contains('hidden')) $('loadtip').textContent = randomTip();
     $('loading').classList.toggle('hidden', !on);
     $('loading').classList.toggle('fade', this.state !== 'boot');
     $('btnCancel').classList.toggle('hidden', !cancel);
@@ -226,7 +228,7 @@ class Game {
     let net;
     try {
       net = mode === 'online' ? await Net.online(4000)
-        : Net.offline({ bots: settings.bots + 1, difficulty: settings.diff, fragLimit: settings.frags, timeLimit: settings.time * 60 }, !location.search.includes('noworker'));
+        : Net.offline({ bots: settings.bots + 1, difficulty: settings.diff, fragLimit: settings.frags, timeLimit: settings.time * 60, mode: settings.mode }, !location.search.includes('noworker'));
     } catch {
       this.loadProgress('Sunucuya bağlanılamadı.', 0);
       setTimeout(() => this.loading(false), 1600);
@@ -243,6 +245,9 @@ class Game {
     }
     if (!welcome) { this.loadProgress('Sunucu yanıt vermedi.', 0); net.close(); setTimeout(() => this.loading(false), 1600); this.starting = false; return; }
     this.myId = welcome.id;
+    this.mode = welcome.mode || 'ffa';
+    this.myTeam = welcome.team ?? -1;
+    this.teamScore = welcome.teamScore || [0, 0];
     this.fragLimit = welcome.fragLimit;
     this.timeLimit = welcome.timeLimit;
     this.tl = welcome.timeLimit; this.tlAt = this.time;
@@ -272,11 +277,13 @@ class Game {
     this.loading(false);
     this.sound.setHum?.(0.9);
     $('pause').classList.remove('hidden'); // hidden again once the pointer lock is granted
+    net.setPaused(true);                     // offline: the match starts when the pointer lock is granted
     this.lock();
     this.sendT = 0; this.pingT = 0;
   }
 
   quitToMenu() {
+    saveCareer();
     if (this.net) this.net.close();
     this.net = null;
     for (const r of this.remotes.values()) this.scene.remove(r.model.root);
@@ -361,11 +368,14 @@ class Game {
       const paused = !this.locked && this.state === 'game';
       $('pause').classList.toggle('hidden', !paused);
       if (paused) this.showPauseMain();
+      this.net?.setPaused(paused);
       if (!this.locked) { this.mouse.l = this.mouse.r = false; this.keys = {}; this.me.nadeHeld = false; }
     });
     document.addEventListener('pointerlockerror', () => { if (this.state === 'game') $('pause').classList.remove('hidden'); });
+    document.addEventListener('visibilitychange', () => { if (this.state === 'game') this.net?.setPaused(document.hidden || !this.locked); });
     // Ctrl is crouch: guard against Ctrl+W closing the tab mid-match
-    window.addEventListener('beforeunload', (e) => { if (this.state === 'game' && !this.quitting) { e.preventDefault(); e.returnValue = ''; } });
+    window.addEventListener('beforeunload', (e) => { saveCareer(); if (this.state === 'game' && !this.quitting) { e.preventDefault(); e.returnValue = ''; } });
+    window.addEventListener('pagehide', () => saveCareer());
     this.canvas.addEventListener('click', () => this.lock());
     $('btnResume').onclick = () => this.lock();
     $('btnQuit').onclick = () => { this.sound.ui('ui_click', 0.5); this.quitToMenu(); };
@@ -395,28 +405,38 @@ class Game {
     });
     document.addEventListener('keydown', (e) => {
       if (this.state !== 'game') return;
-      if (e.code === 'Tab') { e.preventDefault(); this.scoreOpen = true; this.renderScore(); return; }
+      const act = this.actionOf(e.code);
+      if (act === 'score' || e.code === 'Tab') e.preventDefault();
+      if (act === 'score') { this.scoreOpen = true; this.renderScore(); return; }
       if (!this.locked) return;
-      if (e.code === 'Space' || e.code.startsWith('Arrow') || e.ctrlKey || e.code === 'Tab') e.preventDefault();
+      if (e.code === 'Space' || e.code.startsWith('Arrow') || e.ctrlKey || e.altKey) e.preventDefault();
       if (e.repeat) return;
       this.keys[e.code] = true;
       const me = this.me;
-      if (!settings.holdCrouch && (e.code === 'KeyC' || e.code === 'ControlLeft' || e.code === 'ControlRight')) me.crouchToggle = !me.crouchToggle;
+      if (!settings.holdCrouch && act === 'crouch') me.crouchToggle = !me.crouchToggle;
       if (!me.alive) return;
-      if (e.code === 'KeyR') this.startReload();
-      if (e.code === 'KeyF') this.interact();
-      if (e.code === 'KeyT') { me.flash = !me.flash; this.sound.ui('ui_click', 0.35); }
-      if (e.code === 'KeyB') this.cycleMode();
-      if (e.code === 'KeyV') this.inspect();
-      if (e.code === 'KeyG' || e.code === 'Digit4') this.nadePress();
-      if (SLOT_KEYS[e.code]) this.equip(SLOT_KEYS[e.code]);
+      if (act === 'reload') this.startReload();
+      else if (act === 'use') this.interact();
+      else if (act === 'flash') { me.flash = !me.flash; this.sound.ui('ui_click', 0.35); }
+      else if (act === 'mode') this.cycleMode();
+      else if (act === 'inspect') this.inspect();
+      else if (act === 'nade') this.nadePress();
+      else if (SLOT_ACTIONS[act]) this.equip(SLOT_ACTIONS[act]);
     });
     document.addEventListener('keyup', (e) => {
       this.keys[e.code] = false;
-      if (e.code === 'Tab') { this.scoreOpen = false; this.hud.scoreboard(false); }
-      if (e.code === 'KeyG' || e.code === 'Digit4') this.me.nadeHeld = false;
+      const act = this.actionOf(e.code);
+      if (act === 'score') { this.scoreOpen = false; this.hud.scoreboard(false); }
+      if (act === 'nade') this.me.nadeHeld = false;
     });
   }
+  // key code -> action (player bindings plus fixed alternates like Ctrl for crouch)
+  actionOf(code) {
+    for (const a in settings.binds) if (settings.binds[a] === code) return a;
+    for (const a in ALT_KEYS) if (ALT_KEYS[a].includes(code) && !Object.values(settings.binds).includes(code)) return a;
+    return null;
+  }
+  down(a) { if (this.keys[settings.binds[a]]) return true; const alt = ALT_KEYS[a]; return !!alt && alt.some((c) => this.keys[c]); }
   showPauseMain() {
     $('pauseMain').classList.remove('hidden'); $('pauseSettings').classList.add('hidden');
   }
@@ -556,6 +576,10 @@ class Game {
       case 'nade_pull':
         if (me.nadeHeld) { me.cooking = true; me.cookT = 0; this.vm.play('nade_hold', 1); } else this.vm.play('nade_throw', 0.45);
         return;
+      case 'nade_throw': case 'inspect':
+        // a throw may have interrupted a pump / bolt cycle: chamber a round before the gun is usable again
+        if (s.needsCycle && s.mag > 0 && w.cycle) { me.cycling = true; this.vm.play(w.cls === 'bolt' ? 'bolt' : 'pump', w.cycle); }
+        return;
     }
   }
 
@@ -581,18 +605,21 @@ class Game {
         for (const p of m.list) {
           ids.add(p.id);
           this.names.set(p.id, p);
-          if (p.id === this.myId || this.remotes.has(p.id)) continue;
+          if (p.id === this.myId) { this.myTeam = p.team ?? -1; continue; }
+          if (this.remotes.has(p.id)) continue;
           const model = new Soldier(p.color, 'pistol');
           model.root.visible = false;
           this.scene.add(model.root);
           this.remotes.set(p.id, { id: p.id, model, buf: [], x: 0, y: 0, z: 0, yaw: 0, pitch: 0, speed: 0, stepAcc: 0, flags: 0, w: 0, alive: false, kills: 0, deaths: 0, hs: 0, hp: 100, ar: 0, lean: 0 });
         }
+        for (const r of this.remotes.values()) r.model.setFriendly(this.isFriend(r.id));
         for (const [id, r] of this.remotes) if (!ids.has(id)) { this.scene.remove(r.model.root); this.remotes.delete(id); }
         return;
       }
       case 'snap': {
         if (this.lastSnapT == null || m.st >= this.lastSnapT) { this.lastSnapT = m.st; this.lastSnapAt = performance.now() / 1000; }
         this.tl = m.tl; this.tlAt = this.time;
+        if (m.ts) this.teamScore = m.ts;
         for (const s of m.ps) {
           const [id, x, y, z, yaw, pitch, f, w, hp, ar, k, d, hs] = s;
           if (id === this.myId) {
@@ -683,7 +710,8 @@ class Game {
       case 'undrop': this.removeDrop(m.id); return;
       case 'match':
         this.endData = m; this.endAt = this.time;
-        this.hud.endScreen(m, this.myId);
+        this.hud.endScreen(m, this.myId, this.myTeam);
+        recordMatch(m.mode === 'tdm' ? m.winnerTeam === this.myTeam : m.winner === this.myId, m.table.find((r) => r.id === this.myId));
         this.sound.ui('ui_end', 0.6);
         me.ads = 0;
         return;
@@ -709,7 +737,7 @@ class Game {
       this.hud.toast(`+ ${W.label}`);
       if (me.slot === L.slot) { this.vm.stop(); this.setWeapon(L.slot); } else this.equip(L.slot);
     } else if (L.k === 'floor') {
-      this.hud.toast(`${WEAPONS[L.w].label} yere bırakıldı — [F] ile değiştir`);
+      this.hud.toast(`${WEAPONS[L.w].label} yere bırakıldı — [${keyLabel(settings.binds.use)}] ile değiştir`);
     } else if (L.k === 'ammo') {
       const owned = ['primary', 'secondary'].filter((s) => me.inv[s]);
       owned.sort((a, b) => me.inv[a].res / WEAPONS[me.inv[a].w].maxReserve - me.inv[b].res / WEAPONS[me.inv[b].w].maxReserve);
@@ -738,10 +766,13 @@ class Game {
     this.post.final.uniforms.uFlash.value = Math.max(this.post.final.uniforms.uFlash.value, head ? 0.25 : 0);
   }
 
+  isFriend(id) { return this.mode === 'tdm' && id !== this.myId && this.names.get(id)?.team === this.myTeam; }
+
   onKill(m) {
     const me = this.me;
+    if (m.ts) this.teamScore = m.ts;
     const zone = m.z, kn = this.names.get(m.k)?.name || '?', vn = this.names.get(m.v)?.name || '?';
-    this.hud.feed(m.k, m.v, m.w, zone, this.myId, this.names);
+    this.hud.feed(m.k, m.v, m.w, zone, this.myId, this.names, this.mode === 'tdm' ? this.myTeam : null);
     if (m.v === this.myId) {
       me.alive = false; me.deathAt = this.time; me.hp = 0; me.ads = 0; me.nadeHeld = false; me.cooking = false; me.reloading = false;
       me.deathYaw = me.yaw;
@@ -759,9 +790,13 @@ class Game {
         const dx = r.x - m.kp[0], dz = r.z - m.kp[1], L = Math.hypot(dx, dz) || 1, c = Math.cos(r.yaw), s = Math.sin(r.yaw);
         const lx = (dx / L) * c - (dz / L) * s, lz = (dx / L) * s + (dz / L) * c;
         r.model.die(Math.atan2(lx, lz), zone === 'h');
+        // blood pool where the body lands
+        this.blood.add(this.v1.set(r.x + (dx / L) * 0.7, 0.003, r.z + (dz / L) * 0.7), this.v2.set(0, 1, 0), 0.7 + Math.random() * 0.4);
       }
     }
+    if (m.v === this.myId) recordDeath();
     if (m.k === this.myId && m.v !== this.myId) {
+      recordKill(m.w, zone);
       me.streak = m.s;
       const extra = zone === 'h' ? ' · KAFADAN' : zone === 'back' ? ' · SIRTTAN' : m.w === 'nade' ? ' · PATLAMA' : '';
       this.hud.toast(`+1 LEŞ  ${vn}${extra}`, zone === 'h' || zone === 'back' ? 'hs' : 'kill');
@@ -934,7 +969,7 @@ class Game {
       const r = spread * Math.sqrt(Math.random()), th = Math.random() * Math.PI * 2;
       const d = this.dir.copy(base).addScaledVector(right, Math.cos(th) * r).addScaledVector(up, Math.sin(th) * r).normalize();
       const res = this.trace(origin, d, w.range);
-      if (res.kind === 'player') {
+      if (res.kind === 'player' && !this.isFriend(res.id)) {
         const h = hits.get(res.id) || { id: res.id, dmg: 0, zone: 'l' };
         h.dmg += dmgAt(w, res.t) * zoneMul(w, res.zone);
         if (rank[res.zone] > rank[h.zone]) h.zone = res.zone;
@@ -978,8 +1013,7 @@ class Game {
     me.trauma = Math.min(1, me.trauma + fl.cam);
     me.fovPunch += fl.fov;
     this.post.final.uniforms.uFlash.value = Math.max(this.post.final.uniforms.uFlash.value, 0.3);
-    this.vmMuzzle.fire(this.vm.muzzle(this.v2), this.vm.flashSize(), 0.045);
-    this.vmFlash.intensity = 6;
+    if (this.scopeK < 0.6) { this.vmMuzzle.fire(this.vm.muzzle(this.v2), this.vm.flashSize(), 0.045); this.vmFlash.intensity = 6; }
     this.muzzleLight.position.copy(muzzleW);
     this.muzzleLight.intensity = 22;
     this.muzzleT = 0.05;
@@ -1001,7 +1035,7 @@ class Game {
     for (const dy of [-0.35, -0.17, 0, 0.17, 0.35]) for (const dp of [-0.2, 0, 0.15]) {
       const d = this.dir.set(-Math.sin(yaw + dy) * Math.cos(pitch + dp), Math.sin(pitch + dp), -Math.cos(yaw + dy) * Math.cos(pitch + dp));
       const res = this.trace(o, d, k.range + 0.25);
-      if (res.kind === 'player' && res.t < bestT) { best = res.id; bestT = res.t; bestZone = res.zone; }
+      if (res.kind === 'player' && res.t < bestT && !this.isFriend(res.id)) { best = res.id; bestT = res.t; bestZone = res.zone; }
     }
     if (best) {
       const r = this.remotes.get(best);
@@ -1091,6 +1125,8 @@ class Game {
       return;
     }
     if (this.state !== 'game') return;
+    addTime(dt);
+    if ((this.careerT = (this.careerT || 0) + dt) > 15) { this.careerT = 0; saveCareer(); }
     for (const m of this.net.poll()) this.onMsg(m);
     if (this.net.closed && !this.lostShown) { this.lostShown = true; this.hud.banner('SUNUCU BAĞLANTISI KOPTU'); }
     this.updateClock(dt);
@@ -1172,9 +1208,9 @@ class Game {
     me.trauma = Math.max(0, me.trauma - dt * 1.8);
     if (!me.alive) { me.deathT = Math.min(1, me.deathT + dt * 1.6); me.vel.set(0, 0, 0); this.nearCrate = -1; this.nearDrop = null; return; }
     const w = WEAPONS[this.curType()];
-    const f = (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0), s = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0);
-    me.crouch = settings.holdCrouch ? !!(k.KeyC || k.ControlLeft || k.ControlRight) : !!me.crouchToggle;
-    const shift = !!(k.ShiftLeft || k.ShiftRight);
+    const f = (this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0), s = (this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0);
+    me.crouch = settings.holdCrouch ? this.down('crouch') : !!me.crouchToggle;
+    const shift = this.down('sprint');
     if (me.exhausted && me.stamina > 0.3) me.exhausted = false;
     me.sprint = shift && f > 0 && !me.crouch && me.ads < 0.3 && me.onGround && !me.reloading && !me.exhausted && !(this.vm.animName || '').startsWith('knife');
     if (me.sprint) {
@@ -1186,7 +1222,7 @@ class Game {
     me.holdBreath = scoped && shift && me.breath > 0;
     if (me.holdBreath) me.breath = Math.max(0, me.breath - dt / 4.5); else me.breath = Math.min(1, me.breath + dt / (scoped ? 6 : 2.5));
     // lean (Q/E): camera slides sideways around cover, limited by nearby walls
-    const leanT = me.sprint ? 0 : (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0);
+    const leanT = me.sprint ? 0 : (this.down('leanR') ? 1 : 0) - (this.down('leanL') ? 1 : 0);
     me.lean = damp(me.lean, leanT, 9, dt);
     if (Math.abs(me.lean) > 0.01) {
       const sgn = Math.sign(me.lean), rx = Math.cos(me.yaw) * sgn, rz = -Math.sin(me.yaw) * sgn;
@@ -1202,7 +1238,7 @@ class Game {
     const acc = me.onGround ? 11 : 1.5;
     me.vel.x = damp(me.vel.x, wx, acc, dt);
     me.vel.z = damp(me.vel.z, wz, acc, dt);
-    if (k.Space && me.onGround && !me.crouch && me.stamina > 0.08) { me.vy = 3.9; me.onGround = false; me.stamina -= 0.08; me.stamRegen = 0.9; }
+    if (this.down('jump') && me.onGround && !me.crouch && me.stamina > 0.08) { me.vy = 3.9; me.onGround = false; me.stamina -= 0.08; me.stamRegen = 0.9; }
     me.vy -= 13 * dt;
     me.pos.y += me.vy * dt;
     if (me.pos.y <= 0) {
@@ -1463,7 +1499,7 @@ class Game {
       hud.clock(this.serial);
       let lead = me.kills;
       for (const r of this.remotes.values()) lead = Math.max(lead, r.kills);
-      hud.match(this.endData ? 0 : Math.max(0, this.tl - (this.time - this.tlAt)), me.kills, me.deaths, lead, this.fragLimit);
+      hud.match(this.endData ? 0 : Math.max(0, this.tl - (this.time - this.tlAt)), me.kills, me.deaths, lead, this.fragLimit, this.mode === 'tdm' ? { score: this.teamScore, mine: this.myTeam } : null);
       hud.vitals(me.hp, me.armor, me.holdBreath || (this.scopeK > 0.6) ? me.breath : me.stamina);
       hud.weapon(s.w, s.mode, s.mag, s.res, me.reloading, w.mag || 1);
       hud.slots(me.inv, me.pendingSlot || me.slot);
@@ -1471,8 +1507,8 @@ class Game {
       hud.protect(me.alive && this.time < me.protectUntil);
       if (this.nearDrop && me.alive) {
         const W = WEAPONS[this.nearDrop.w], held = me.inv[W.slot];
-        hud.prompt(`<b>[F]</b> ${esc(W.label)} al${held && held.w !== this.nearDrop.w ? ` <span style="opacity:.6">(${esc(WEAPONS[held.w].short)} bırakılır)</span>` : ''}`);
-      } else if (this.nearCrate >= 0 && me.alive) hud.prompt('<b>[F]</b> Kutuyu aç');
+        hud.prompt(`<b>[${keyLabel(settings.binds.use)}]</b> ${esc(W.label)} al${held && held.w !== this.nearDrop.w ? ` <span style="opacity:.6">(${esc(WEAPONS[held.w].short)} bırakılır)</span>` : ''}`);
+      } else if (this.nearCrate >= 0 && me.alive) hud.prompt(`<b>[${keyLabel(settings.binds.use)}]</b> Kutuyu aç`);
       else hud.prompt(null);
       if (!me.alive) hud.respawn(Math.max(0, RESPAWN_T - (this.time - me.deathAt)));
       if (this.scoreOpen) this.renderScore();
@@ -1480,7 +1516,7 @@ class Game {
       if (me.alive && me.ads < 0.9) {
         const cam = this.camera, dir = this.v1.set(0, 0, -1).applyQuaternion(cam.quaternion);
         const res = this.trace(cam.position, dir, 40);
-        hud.aimName(res.kind === 'player' ? this.names.get(res.id)?.name || '' : '');
+        hud.aimName(res.kind === 'player' ? this.names.get(res.id)?.name || '' : '', res.kind === 'player' && this.isFriend(res.id));
       } else hud.aimName('');
     }
     hud.cook(me.cooking ? me.cookT / GRENADE.fuse : 0);
@@ -1496,10 +1532,10 @@ class Game {
   }
 
   renderScore() {
-    const rows = [{ id: this.myId, name: settings.name, k: this.me.kills, d: this.me.deaths, hs: this.me.hs, bot: false, alive: this.me.alive }];
-    for (const r of this.remotes.values()) { const n = this.names.get(r.id); rows.push({ id: r.id, name: n?.name || '?', k: r.kills, d: r.deaths, hs: r.hs, bot: n?.bot, alive: r.alive }); }
+    const rows = [{ id: this.myId, name: settings.name, k: this.me.kills, d: this.me.deaths, hs: this.me.hs, bot: false, alive: this.me.alive, team: this.myTeam }];
+    for (const r of this.remotes.values()) { const n = this.names.get(r.id); rows.push({ id: r.id, name: n?.name || '?', k: r.kills, d: r.deaths, hs: r.hs, bot: n?.bot, alive: r.alive, team: n?.team ?? -1 }); }
     rows.sort((a, b) => b.k - a.k || a.d - b.d);
-    this.hud.scoreboard(true, rows, this.myId, this.fragLimit, this.net?.online ? this.ping : null);
+    this.hud.scoreboard(true, rows, this.myId, this.fragLimit, this.net?.online ? this.ping : null, this.mode === 'tdm' ? { score: this.teamScore, mine: this.myTeam } : null);
   }
 }
 
@@ -1507,7 +1543,8 @@ class Game {
 const game = new Game();
 window.__game = game;
 buildSettingsPanel($('settingsBox'), (k) => game.onSetting(k));
-$('controlsBox').innerHTML = controlsTable();
+$('controlsBox').classList.add('controlsHost');
+buildControls($('controlsBox'), (k) => game.onSetting(k));
 $('settingsHome').appendChild($('settingsBox'));
 for (const b of document.querySelectorAll('#nav button')) {
   b.onclick = () => {
@@ -1516,15 +1553,20 @@ for (const b of document.querySelectorAll('#nav button')) {
     document.querySelectorAll('#nav button').forEach((x) => x.classList.toggle('on', x === b));
     document.querySelectorAll('.menu-right .panel').forEach((p) => p.classList.toggle('hidden', p.id !== 'p-' + b.dataset.p));
     if (b.dataset.p === 'settings') $('settingsHome').appendChild($('settingsBox'));
+    if (b.dataset.p === 'profile') $('careerBox').innerHTML = careerHtml();
   };
   b.onmouseenter = () => game.sound.ui('ui_hover', 0.3);
 }
 $('bots').value = settings.bots; $('botsv').textContent = settings.bots;
-$('diff').value = settings.diff; $('frags').value = settings.frags; $('mtime').value = settings.time;
+$('diff').value = settings.diff; $('frags').value = settings.frags; $('mtime').value = settings.time; $('gmode').value = settings.mode;
+const modeLabel = () => { $('fragsLabel').textContent = settings.mode === 'tdm' ? 'Takım skor limiti' : 'Leş limiti'; };
+modeLabel();
+$('gmode').onchange = () => { settings.mode = $('gmode').value; saveSettings(); modeLabel(); };
 $('bots').oninput = () => { settings.bots = +$('bots').value; $('botsv').textContent = settings.bots; saveSettings(); };
 $('diff').onchange = () => { settings.diff = +$('diff').value; saveSettings(); };
 $('frags').onchange = () => { settings.frags = +$('frags').value; saveSettings(); };
 $('mtime').onchange = () => { settings.time = +$('mtime').value; saveSettings(); };
+$('btnCareerReset').onclick = () => { if (confirm('Tüm kariyer istatistikleri silinsin mi?')) { resetCareer(); $('careerBox').innerHTML = careerHtml(); } };
 let onlineOk = false;
 $('btnOffline').onclick = () => game.start('offline');
 $('btnOnline').onclick = () => { if (onlineOk) game.start('online'); };

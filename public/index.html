@@ -60,6 +60,7 @@
       <nav id="nav">
         <button data-p="offline" class="on">BOTLARA KARŞI</button>
         <button data-p="online">ÇOK OYUNCULU</button>
+        <button data-p="profile">PROFİL</button>
         <button data-p="settings">AYARLAR</button>
         <button data-p="controls">KONTROLLER</button>
         <button data-p="about">HAKKINDA</button>
@@ -69,10 +70,11 @@
     <div class="menu-right">
       <section id="p-offline" class="panel">
         <h3>ÇEVRİMDIŞI · BOTLARA KARŞI</h3>
-        <p class="desc">Herkes herkese karşı. Kutulardan silah, zırh, ilk yardım ve el bombası topla; öldürdüğün operatörlerin silahlarını yerden al.</p>
+        <p class="desc">Herkes herkese karşı ya da iki takım halinde. Kutulardan silah, zırh, ilk yardım ve el bombası topla; öldürdüğün operatörlerin silahlarını yerden al.</p>
+        <div class="row"><span class="lab">Mod</span><select id="gmode"><option value="ffa">Herkes herkese (FFA)</option><option value="tdm">Takım çatışması (TDM)</option></select></div>
         <div class="row"><span class="lab">Bot sayısı</span><input id="bots" type="range" min="1" max="11" value="6"><span id="botsv" class="val">6</span></div>
         <div class="row"><span class="lab">Zorluk</span><select id="diff"><option value="0">Kolay</option><option value="1" selected>Normal</option><option value="2">Zor</option></select></div>
-        <div class="row"><span class="lab">Leş limiti</span><select id="frags"><option>10</option><option selected>20</option><option>30</option><option>50</option></select></div>
+        <div class="row"><span class="lab" id="fragsLabel">Leş limiti</span><select id="frags"><option>10</option><option selected>20</option><option>30</option><option>50</option></select></div>
         <div class="row"><span class="lab">Süre</span><select id="mtime"><option value="5">5 dk</option><option value="10" selected>10 dk</option><option value="15">15 dk</option><option value="20">20 dk</option></select></div>
         <button id="btnOffline" class="big">OYNA</button>
       </section>
@@ -82,6 +84,7 @@
         <p class="desc small">Yerel ağda oynamak için bilgisayarlardan birinde <kbd>npm start</kbd> çalıştır; konsolda yazan adresi arkadaşların tarayıcısında açsın. Boş yerleri botlar doldurur.</p>
         <button id="btnOnline" class="big" disabled>SUNUCUYA KATIL</button>
       </section>
+      <section id="p-profile" class="panel hidden"><h3>OPERATÖR KAYDI</h3><div id="careerBox"></div><button id="btnCareerReset" class="ghost small">KAYDI SIFIRLA</button></section>
       <section id="p-settings" class="panel hidden"><h3>AYARLAR</h3><div id="settingsHome"></div></section>
       <section id="p-controls" class="panel hidden"><h3>KONTROLLER</h3><div id="controlsBox"></div></section>
       <section id="p-about" class="panel hidden">
@@ -98,6 +101,7 @@
       <div class="logo small">BACKROOMS<span>BODYCAM</span></div>
       <div id="loadtext">Kamera başlatılıyor…</div>
       <div class="loadbar"><div id="loadfill"></div></div>
+      <div id="loadtip"></div>
       <button id="btnCancel" class="ghost small hidden">İPTAL</button>
     </div>
   </div>

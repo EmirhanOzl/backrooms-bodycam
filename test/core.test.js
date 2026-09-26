@@ -131,3 +131,28 @@ test('every weapon has the data the client needs', () => {
     if (!w.melee) assert.ok(w.mag > 0 && w.rpm > 0 && w.range > 0 && (w.reload > 0 || w.shell), k);
   }
 });
+
+test('team deathmatch: balanced teams, no friendly fire, team score ends the match', () => {
+  const core = new GameCore({ bots: 8, difficulty: 2, fragLimit: 15, timeLimit: 400, seed: 77, mode: 'tdm' });
+  const seen = [];
+  core.join('h', (m) => seen.push(m));
+  core.handle('h', { t: 'join', name: 'Tester' });
+  const count = core.teamCounts();
+  assert.equal(count[0] + count[1], 8);
+  assert.ok(Math.abs(count[0] - count[1]) <= 1, `balanced ${count}`);
+  const me = core.players.get('h');
+  const mate = [...core.players.values()].find((p) => p !== me && p.team === me.team);
+  mate.protect = 0; me.protect = 0;
+  assert.equal(core.damage(mate, 50, me, 'pistol', 'b'), false, 'friendly fire blocked');
+  assert.equal(mate.hp, 100);
+  for (let i = 0; i < 30 * 60 * 6; i++) core.tick(1 / 30);
+  const match = seen.find((m) => m.t === 'match');
+  assert.ok(match, 'match ended');
+  assert.ok(match.mode === 'tdm' && Array.isArray(match.teamScore));
+  assert.ok(Math.max(...match.teamScore) >= 15 || core.time >= 400, 'team score limit reached');
+  for (const k of seen.filter((m) => m.t === 'kill' && m.k !== m.v)) {
+    const a = seen.find((m) => m.t === 'roster')?.list.find((p) => p.id === k.k);
+    const v = seen.find((m) => m.t === 'roster')?.list.find((p) => p.id === k.v);
+    if (a && v) assert.notEqual(a.team, v.team, 'no team kills');
+  }
+});

@@ -1,11 +1,34 @@
 // Persistent player settings + the tabbed settings panel (shared by the main menu and the pause menu).
 const KEY = 'brbc2';
 
+// rebindable actions: [id, label, default key code]
+export const ACTIONS = [
+  ['forward', 'İleri', 'KeyW'], ['back', 'Geri', 'KeyS'], ['left', 'Sola', 'KeyA'], ['right', 'Sağa', 'KeyD'],
+  ['sprint', 'Koş · dürbünde nefes tut', 'ShiftLeft'], ['crouch', 'Çömel', 'KeyC'], ['jump', 'Zıpla', 'Space'],
+  ['leanL', 'Sola eğil', 'KeyQ'], ['leanR', 'Sağa eğil', 'KeyE'], ['reload', 'Şarjör değiştir', 'KeyR'],
+  ['mode', 'Atış modu', 'KeyB'], ['nade', 'El bombası (basılı tut: beklet)', 'KeyG'], ['use', 'Kutu aç · silah al', 'KeyF'],
+  ['flash', 'Fener', 'KeyT'], ['inspect', 'Silahı incele', 'KeyV'], ['slot1', 'Birincil silah', 'Digit1'],
+  ['slot2', 'İkincil silah', 'Digit2'], ['slot3', 'Bıçak', 'Digit3'], ['score', 'Skor tablosu', 'Tab'],
+];
+// fixed secondary keys that always work in addition to the binding
+export const ALT_KEYS = { crouch: ['ControlLeft', 'ControlRight'], sprint: ['ShiftRight'], nade: ['Digit4'] };
+const DEFAULT_BINDS = Object.fromEntries(ACTIONS.map(([a, , k]) => [a, k]));
+
+export function keyLabel(code) {
+  if (!code) return '—';
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  if (code.startsWith('Numpad')) return 'NUM ' + code.slice(6);
+  const map = { ShiftLeft: 'SHIFT', ShiftRight: 'SAĞ SHIFT', ControlLeft: 'CTRL', ControlRight: 'SAĞ CTRL', AltLeft: 'ALT', AltRight: 'ALT GR', Space: 'SPACE', Tab: 'TAB', CapsLock: 'CAPS', Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'", Backslash: '\\', Comma: ',', Period: '.', Slash: '/', Enter: 'ENTER', Backspace: 'BACKSPACE' };
+  return map[code] || code.replace('Arrow', '').toUpperCase();
+}
+
 export const DEFAULTS = {
   name: 'Gezgin', sens: 1, adsSens: 1, invertY: false, holdAds: true, holdCrouch: true, xhair: true, hitmarks: true,
   quality: 1, fov: 80, lens: 1, shake: 1, blur: true, bright: 1, fps: false,
   master: 0.8, sfx: 1, amb: 0.8, ui: 0.9, hrtf: true,
-  bots: 6, diff: 1, frags: 20, time: 10,
+  bots: 6, diff: 1, frags: 20, time: 10, mode: 'ffa',
+  binds: DEFAULT_BINDS,
 };
 
 function load() {
@@ -14,6 +37,7 @@ function load() {
   if (saved.vol != null && saved.master == null) saved.master = saved.vol;
   const s = { ...DEFAULTS };
   for (const k of Object.keys(DEFAULTS)) if (saved[k] != null && typeof saved[k] === typeof DEFAULTS[k]) s[k] = saved[k];
+  s.binds = { ...DEFAULT_BINDS, ...(saved.binds && typeof saved.binds === 'object' ? saved.binds : {}) };
   return s;
 }
 export const settings = load();
@@ -53,19 +77,44 @@ const SCHEMA = [
       { k: 'hrtf', label: '3D kulaklık sesi (HRTF)', type: 'check', hint: 'Kulaklıkla adım ve atış yönünü çok daha net duyarsın.' },
     ],
   },
-  {
-    tab: 'KONTROLLER', keys: [
-      ['W A S D', 'Hareket'], ['SHIFT', 'Koş · dürbünde nefes tut'], ['CTRL / C', 'Çömel'], ['Q / E', 'Sola / sağa eğil'], ['SPACE', 'Zıpla'],
-      ['SOL TIK', 'Ateş · bıçak: hafif saldırı'], ['SAĞ TIK', 'Nişan al · bıçak: ağır saplama'], ['R', 'Şarjör değiştir'], ['B', 'Atış modu (otomatik / 3\'lü / tek)'],
-      ['G veya 4', 'El bombası (basılı tut: pimi çekip beklet)'], ['F', 'Kutu aç · yerdeki silahı al'], ['T', 'Fener'], ['V', 'Silahı incele'],
-      ['1 / 2 / 3', 'Birincil / ikincil / bıçak'], ['TEKERLEK', 'Silah değiştir'], ['TAB', 'Skor tablosu'], ['ESC', 'Duraklat'],
-    ],
-  },
+  { tab: 'KONTROLLER', controls: true },
 ];
 
-export function controlsTable() {
-  const sec = SCHEMA.find((x) => x.keys);
-  return '<table class="keys">' + sec.keys.map(([k, v]) => `<tr><td><kbd>${k}</kbd></td><td>${v}</td></tr>`).join('') + '</table>';
+// Rebinding table: click an action, then press the new key (Esc cancels). A key already in use is swapped.
+export function buildControls(root, onChange = () => {}) {
+  root.innerHTML = '';
+  const t = document.createElement('table'); t.className = 'keys';
+  for (const [a, label] of ACTIONS) {
+    const tr = document.createElement('tr');
+    const td1 = document.createElement('td'), td2 = document.createElement('td');
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'bind';
+    const alt = ALT_KEYS[a] ? ` <span class="alt">/ ${ALT_KEYS[a].map(keyLabel).filter((x, i, arr) => arr.indexOf(x) === i).join(' / ')}</span>` : '';
+    b.innerHTML = `<kbd>${keyLabel(settings.binds[a])}</kbd>`;
+    b.onclick = () => {
+      b.innerHTML = '<kbd class="wait">TUŞA BAS…</kbd>';
+      const on = (e) => {
+        e.preventDefault(); e.stopImmediatePropagation();
+        window.removeEventListener('keydown', on, true);
+        if (e.code !== 'Escape') {
+          const other = Object.keys(settings.binds).find((k) => k !== a && settings.binds[k] === e.code);
+          if (other) settings.binds[other] = settings.binds[a];
+          settings.binds[a] = e.code;
+          saveSettings(); onChange('binds');
+        }
+        for (const r of document.querySelectorAll('.controlsHost')) buildControls(r, onChange);
+      };
+      window.addEventListener('keydown', on, true);
+    };
+    td1.appendChild(b); td1.insertAdjacentHTML('beforeend', alt);
+    td2.textContent = label;
+    tr.append(td1, td2); t.appendChild(tr);
+  }
+  const fixed = [['SOL TIK', 'Ateş · bıçak: hafif saldırı'], ['SAĞ TIK', 'Nişan al · bıçak: ağır saplama'], ['TEKERLEK', 'Silah değiştir'], ['ESC', 'Duraklat']];
+  for (const [k, v] of fixed) t.insertAdjacentHTML('beforeend', `<tr><td><kbd>${k}</kbd></td><td>${v}</td></tr>`);
+  root.appendChild(t);
+  const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'ghost small'; reset.textContent = 'TUŞLARI SIFIRLA';
+  reset.onclick = () => { settings.binds = { ...DEFAULT_BINDS }; saveSettings(); onChange('binds'); for (const r of document.querySelectorAll('.controlsHost')) buildControls(r, onChange); };
+  root.appendChild(reset);
 }
 
 // Builds the panel into `root`; onChange(key) is called after every change (already saved).
@@ -80,8 +129,9 @@ export function buildSettingsPanel(root, onChange) {
     const page = document.createElement('div'); page.className = 'page' + (i === 0 ? '' : ' hidden');
     body.appendChild(page);
     b.onclick = () => { tabs.querySelectorAll('.tab').forEach((t) => t.classList.remove('on')); b.classList.add('on'); pages.forEach((p) => p.classList.add('hidden')); page.classList.remove('hidden'); };
-    if (sec.keys) {
-      page.innerHTML = '<table class="keys">' + sec.keys.map(([k, v]) => `<tr><td><kbd>${k}</kbd></td><td>${v}</td></tr>`).join('') + '</table>';
+    if (sec.controls) {
+      page.classList.add('controlsHost');
+      buildControls(page, onChange);
       return page;
     }
     for (const it of sec.items) {
@@ -114,6 +164,6 @@ export function buildSettingsPanel(root, onChange) {
     return page;
   });
   const reset = document.createElement('button'); reset.className = 'ghost small'; reset.type = 'button'; reset.textContent = 'VARSAYILANLARA DÖN';
-  reset.onclick = () => { const name = settings.name; Object.assign(settings, DEFAULTS, { name }); saveSettings(); buildSettingsPanel(root, onChange); for (const k of Object.keys(DEFAULTS)) onChange(k); };
+  reset.onclick = () => { const name = settings.name, binds = settings.binds; Object.assign(settings, DEFAULTS, { name, binds }); saveSettings(); buildSettingsPanel(root, onChange); for (const k of Object.keys(DEFAULTS)) onChange(k); };
   root.appendChild(reset);
 }

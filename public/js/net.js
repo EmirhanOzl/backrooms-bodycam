@@ -44,13 +44,20 @@ export class Net {
     let last = performance.now();
     n.timer = setInterval(() => {
       const now = performance.now();
-      core.tick(Math.min(0.1, (now - last) / 1000));
+      if (!n.paused) core.tick(Math.min(0.1, (now - last) / 1000));
       last = now;
     }, 1000 / 30);
     return n;
   }
 
   poll() { const q = this.queue; this.queue = []; return q; }
+
+  // offline only: freeze the simulation while the game is paused
+  setPaused(on) {
+    if (this.online || this.paused === on) return;
+    this.paused = on;
+    if (this.worker) this.worker.postMessage({ t: '__pause', on });
+  }
 
   close() {
     if (this.ws) this.ws.close();

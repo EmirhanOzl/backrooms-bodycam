@@ -12,16 +12,20 @@ npm start          # http://localhost:3000
 npm test           # ortak oyun çekirdeğinin testleri (botlarla tam maç simülasyonu dahil)
 ```
 
-- **Çevrimdışı (botlara karşı):** Menüden bot sayısı, zorluk, leş limiti ve süreyi seçip `OYNA`.
+- **Çevrimdışı (botlara karşı):** Menüden mod (herkes herkese / takım çatışması), bot sayısı, zorluk, skor limiti ve süreyi seçip `OYNA`.
+  Çevrimdışı maç ESC ile duraklatılınca (veya sekme arka plana geçince) gerçekten durur.
   Maç simülasyonu tarayıcıda ayrı bir Web Worker'da çalışır; `public/` klasörü herhangi bir statik
   sunucuda da oynanır (ES modülleri `file://` üzerinden açılamaz, bir HTTP sunucusu şart).
 - **Çok oyunculu (PvP):** `npm start` konsolda yerel ağ adresini yazar (ör. `http://192.168.1.20:3000`).
   Arkadaşların bu adresi açıp `ÇOK OYUNCULU → SUNUCUYA KATIL` der. Boş yerleri botlar doldurur.
 
 Sunucu ayarları (ortam değişkenleri): `PORT` (3000), `BOTS` (toplam katılımcı hedefi, 5), `DIFF` (0/1/2),
-`FRAGS` (leş limiti, 25), `TIME` (maç süresi, saniye, 600).
+`FRAGS` (leş / takım skor limiti, 25), `TIME` (maç süresi, saniye, 600), `MODE` (`ffa` veya `tdm`).
 
 ## Kontroller
+
+Tüm tuşlar `KONTROLLER` menüsünden (veya oyun içi ayarlardan) yeniden atanabilir: eyleme tıkla, yeni tuşa bas.
+Aşağıdakiler varsayılanlardır.
 
 | Tuş | İşlev |
 | --- | --- |
@@ -63,8 +67,12 @@ Sunucu ayarları (ortam değişkenleri): `PORT` (3000), `BOTS` (toplam katılım
 
 ## Oynanış
 
-- Serbest-herkese-karşı deathmatch; leş limitine ulaşan ya da süre bitince önde olan kazanır. Maç sonunda
-  isabet, kafadan vuruş, en iyi seri ve verilen hasarı gösteren rapor çıkar; ardından **yeni üretilmiş bir seviyede** yeni maç başlar.
+- **Herkes herkese (FFA):** leş limitine ulaşan ya da süre bitince önde olan kazanır.
+- **Takım çatışması (TDM):** MAVİ ve KIRMIZI takımlar; dost ateşi yok, takım arkadaşlarının başında mavi işaret görünür,
+  takım skoru limitine ulaşan takım kazanır. Botlar iki takımı eşit tutacak şekilde dağılır.
+- Maç sonunda isabet, kafadan vuruş, en iyi seri ve verilen hasarı gösteren rapor çıkar; ardından
+  **yeni üretilmiş bir seviyede** yeni maç başlar.
+- `PROFİL` menüsü yerel kariyer kaydını tutar: maç, galibiyet oranı, leş/ölüm, kafadan oranı, isabet, en iyi seri, en sevdiğin silah.
 - İsabet bölgeleri: kafa ×2–2.5 (silaha göre), gövde ×1, bacak ×0.75. Zırh plakası sadece gövdeyi korur
   (gövde hasarının yarısını, patlamanın %35'ini emer). Mesafe arttıkça hasar düşer; çömelmek sekmeyi, eğilmek hedef alanını azaltır.
 - Vuruş işaretleri anında gelir: beyaz = gövde/bacak, sarı = kafa, mavi = zırh, kırmızı = öldürme (her birinin sesi farklı).

@@ -588,6 +588,18 @@ function soldierGeometries() {
   return soldierGeoCache;
 }
 
+let friendMat = null;
+function friendMarkerMaterial() {
+  if (friendMat) return friendMat;
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d');
+  x.fillStyle = 'rgba(0,0,0,0.5)'; x.beginPath(); x.moveTo(6, 12); x.lineTo(58, 12); x.lineTo(32, 56); x.closePath(); x.fill();
+  x.fillStyle = '#6fb4ff'; x.beginPath(); x.moveTo(12, 16); x.lineTo(52, 16); x.lineTo(32, 48); x.closePath(); x.fill();
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  friendMat = new THREE.SpriteMaterial({ map: t, color: new THREE.Color(1.6, 1.6, 1.6), depthWrite: false, transparent: true, fog: false });
+  return friendMat;
+}
+
 const HOLD = {
   pistol: [0.0, 0.0, -0.36], revolver: [0.0, 0.0, -0.36], knife: [0.12, -0.12, -0.3], default: [0.09, -0.02, -0.12],
 };
@@ -645,6 +657,16 @@ export class Soldier {
     this.gun.add(this.beam); this.beam.position.copy(data.muzzle);
   }
   muzzleWorld(out) { return out.copy(this.gun.userData.muzzle).applyMatrix4(this.gun.matrixWorld); }
+  // small blue chevron over teammates' heads (team deathmatch)
+  setFriendly(on) {
+    if (on && !this.marker) {
+      this.marker = new THREE.Sprite(friendMarkerMaterial());
+      this.marker.scale.set(0.11, 0.11, 1);
+      this.marker.position.set(0, 2.02, 0);
+      this.root.add(this.marker);
+    }
+    if (this.marker) this.marker.visible = !!on;
+  }
   flinch(k, side) { this.flinchK = Math.min(1.2, (this.flinchK || 0) + 0.5 + k); this.flinchDir = side || (Math.random() < 0.5 ? -1 : 1); }
   // one-shot upper-body actions: 'swing', 'heavy', 'throw'
   action(name) { this.act = name; this.actT = 0; }
@@ -707,6 +729,7 @@ export class Soldier {
       a.h.position.copy(hand);
     }
     // death: topple around the feet in the direction of the killing blow; weapon is dropped (world drop)
+    if (this.marker) this.marker.material.opacity = s.alive ? 0.9 : 0;
     if (!s.alive) {
       this.deadT = Math.min(1, this.deadT + dt * 2.3 * (this.dieFast || 1));
       const k = this.deadT, e = k * k * (3 - 2 * k);

@@ -13,6 +13,8 @@ export const RESPAWN_T = 4, PROTECT_T = 2, INTERMISSION_T = 11;
 // player flag bits (snapshots / input)
 export const F = { ALIVE: 1, CROUCH: 2, FLASH: 4, MOVE: 8, SPRINT: 16, RELOAD: 32, LEAN_L: 64, LEAN_R: 128, PROTECT: 256, ADS: 512 };
 const CLIENT_FLAGS = F.CROUCH | F.FLASH | F.MOVE | F.SPRINT | F.RELOAD | F.LEAN_L | F.LEAN_R | F.ADS;
+export const TEAM_COLORS = ['#27456f', '#6f2727'];
+export const TEAM_NAMES = ['MAVİ', 'KIRMIZI'];
 export const COLORS = ['#2f3b52', '#4a3a2a', '#23402f', '#5a2626', '#3d3d3d', '#2b4a5a', '#53461f', '#402a4d', '#1f3a3a', '#5a3d1f', '#343c1c', '#4d2a3d'];
 
 const BOT_NAMES = ['Kayıp_Gezgin', 'M.E.G.Ajanı', 'Gülümseyen', 'Parti_Kuşu', 'Sarı_Duvar', 'Yankı', 'Tazı', 'Nem', 'Vızıltı',
@@ -42,6 +44,8 @@ export class GameCore {
     this.difficulty = clamp(opts.difficulty ?? 1, 0, 2);
     this.fragLimit = opts.fragLimit ?? 25;
     this.timeLimit = opts.timeLimit ?? 600;
+    this.mode = opts.mode === 'tdm' ? 'tdm' : 'ffa';
+    this.teamScore = [0, 0];
     this.time = 0;
     this.players = new Map();
     this.clients = new Map();
@@ -80,6 +84,7 @@ export class GameCore {
       if (c.player) return;
       const name = String(msg.name || 'Oyuncu').replace(/[<>&"]/g, '').trim().slice(0, 16) || 'Oyuncu';
       const p = this.makePlayer(id, name, false);
+      this.assignTeam(p);
       c.player = p;
       this.players.set(id, p);
       this.syncBots();
@@ -87,6 +92,7 @@ export class GameCore {
       this.send(id, {
         t: 'welcome', id, seed: this.seed, size: this.size, crates: this.crates.map((k) => (k.open ? 1 : 0)),
         drops: [...this.drops.values()].map(dropMsg), fragLimit: this.fragLimit, timeLimit: this.timeLimit, st: r3(this.time),
+        mode: this.mode, team: p.team, teamScore: this.teamScore,
       });
       this.broadcastRoster();
       this.send(id, this.spawnMsg(p));
@@ -125,7 +131,7 @@ export class GameCore {
       id, name, bot, color: COLORS[this.colorSeq++ % COLORS.length],
       x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: false, flags: 0,
       hp: MAX_HP, armor: 0, alive: false, respawnAt: 0, spawnT: 0, protect: 0,
-      weapon: 'pistol', primary: null, secondary: 'pistol', nades: 1,
+      weapon: 'pistol', primary: null, secondary: 'pistol', nades: 1, team: -1,
       kills: 0, deaths: 0, hs: 0, shots: 0, hits: 0, dmgDone: 0, streak: 0, best: 0,
       lastShot: -1, lastSwing: -9, swingHeavy: false, swingUsed: true, lastNade: -9,
       // bot brain
@@ -142,11 +148,18 @@ export class GameCore {
     const want = Math.max(0, this.botTarget - humans);
     const bots = [...this.players.values()].filter((p) => p.bot);
     if (bots.length > want) {
-      for (const b of bots.slice(want)) this.players.delete(b.id);
+      for (let n = bots.length - want; n > 0; n--) {
+        // in team mode remove from the bigger team so the sides stay even
+        const count = this.teamCounts();
+        const big = count[0] >= count[1] ? 0 : 1;
+        const b = [...this.players.values()].reverse().find((p) => p.bot && (this.mode !== 'tdm' || p.team === big));
+        if (b) this.players.delete(b.id);
+      }
     } else {
       for (let i = bots.length; i < want; i++) {
         const id = 'b' + ++this.botSeq;
         const b = this.makePlayer(id, BOT_NAMES[(this.botSeq - 1) % BOT_NAMES.length], true);
+        this.assignTeam(b);
         this.players.set(id, b);
         this.spawn(b);
       }
@@ -154,8 +167,21 @@ export class GameCore {
     if (this.clients.size) this.broadcastRoster();
   }
 
+  teamCounts() {
+    const c = [0, 0];
+    for (const p of this.players.values()) if (p.team >= 0) c[p.team]++;
+    return c;
+  }
+  assignTeam(p) {
+    if (this.mode !== 'tdm') return;
+    const c = this.teamCounts();
+    p.team = c[0] < c[1] ? 0 : c[1] < c[0] ? 1 : (Math.random() < 0.5 ? 0 : 1);
+    p.color = TEAM_COLORS[p.team];
+  }
+  foes(a, b) { return a !== b && (this.mode !== 'tdm' || a.team !== b.team); }
+
   broadcastRoster() {
-    this.broadcast({ t: 'roster', list: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, bot: p.bot, color: p.color })) });
+    this.broadcast({ t: 'roster', list: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, bot: p.bot, color: p.color, team: p.team })) });
   }
 
   // far from everyone, and preferably out of anyone's line of sight
@@ -165,15 +191,16 @@ export class GameCore {
     for (let i = 0; i < 26; i++) {
       const cell = (Math.random() * map.W * map.H) | 0;
       const [x, z] = cellCenter(map, cell);
-      let dmin = 60, seen = false;
+      let dmin = 60, seen = false, dTeam = 30;
       for (const o of this.players.values()) {
         if (o === p || !o.alive) continue;
         const d = Math.hypot(o.x - x, o.z - z);
+        if (!this.foes(p, o)) { dTeam = Math.min(dTeam, d); continue; }
         dmin = Math.min(dmin, d);
         if (d < 34 && lineOfSight(map, o.x, o.z, x, z)) seen = true;
       }
       for (const g of this.nades) if (Math.hypot(g.x - x, g.z - z) < 10) dmin -= 10;
-      const s = dmin - (seen ? 25 : 0) + Math.random() * 2;
+      const s = dmin - (seen ? 25 : 0) - (this.mode === 'tdm' ? dTeam * 0.35 : 0) + Math.random() * 2;
       if (s > bestS) { bestS = s; best = [x, z]; }
     }
     p.x = best[0] + (Math.random() - 0.5); p.z = best[1] + (Math.random() - 0.5); p.y = 0;
@@ -198,6 +225,7 @@ export class GameCore {
   // zone: 'h' head, 'b' torso (plate applies), 'l' legs, 'k' knife, 'back' backstab, 'x' explosion
   damage(t, amount, a, weapon, zone) {
     if (!t.alive || this.intermission) return false;
+    if (a !== t && !this.foes(a, t)) return false; // no friendly fire
     if (this.time < t.protect) return false;
     let d = amount, plate = false;
     if (t.armor > 0 && (zone === 'b' || zone === 'x')) {
@@ -222,9 +250,10 @@ export class GameCore {
     if (a !== t) {
       a.kills++; a.streak++; a.best = Math.max(a.best, a.streak); streak = a.streak;
       if (zone === 'h') a.hs++;
+      if (this.mode === 'tdm') this.teamScore[a.team]++;
     } else a.kills = Math.max(0, a.kills - 1); // suicide penalty
-    this.broadcast({ t: 'kill', k: a.id, v: t.id, w: weapon, z: zone, s: streak, kp: [r2(a.x), r2(a.z)] });
-    if (a !== t && a.kills >= this.fragLimit) this.endMatch(a);
+    this.broadcast({ t: 'kill', k: a.id, v: t.id, w: weapon, z: zone, s: streak, kp: [r2(a.x), r2(a.z)], ts: this.mode === 'tdm' ? this.teamScore : undefined });
+    if (a !== t && (this.mode === 'tdm' ? this.teamScore[a.team] >= this.fragLimit : a.kills >= this.fragLimit)) this.endMatch(a);
   }
 
   endMatch(winner) {
@@ -232,17 +261,19 @@ export class GameCore {
     if (!winner) winner = [...this.players.values()].sort((x, y) => y.kills - x.kills || x.deaths - y.deaths)[0] || null;
     this.intermission = this.time + INTERMISSION_T;
     this.nades.length = 0;
-    this.broadcast({ t: 'match', winner: winner ? winner.id : null, name: winner ? winner.name : '', table: this.table(), next: INTERMISSION_T });
+    const ts = this.teamScore, wt = this.mode === 'tdm' ? (ts[0] === ts[1] ? -1 : ts[0] > ts[1] ? 0 : 1) : null;
+    this.broadcast({ t: 'match', mode: this.mode, winnerTeam: wt, teamScore: ts, winner: winner ? winner.id : null, name: winner ? winner.name : '', table: this.table(), next: INTERMISSION_T });
   }
 
   table() {
     return [...this.players.values()]
       .sort((x, y) => y.kills - x.kills || x.deaths - y.deaths)
-      .map((p) => ({ id: p.id, name: p.name, bot: p.bot, k: p.kills, d: p.deaths, hs: p.hs, acc: p.shots ? Math.round((p.hits / p.shots) * 100) : 0, best: p.best, dmg: Math.round(p.dmgDone) }));
+      .map((p) => ({ id: p.id, name: p.name, bot: p.bot, team: p.team, k: p.kills, d: p.deaths, hs: p.hs, acc: p.shots ? Math.round((p.hits / p.shots) * 100) : 0, best: p.best, dmg: Math.round(p.dmgDone) }));
   }
 
   newMatch() {
     this.newLevel((Math.random() * 1e9) | 0);
+    this.teamScore = [0, 0];
     this.broadcast({ t: 'reset', seed: this.seed, size: this.size, fragLimit: this.fragLimit, timeLimit: this.timeLimit });
     for (const p of this.players.values()) p.alive = false;
     for (const p of this.players.values()) { this.resetStats(p); this.spawn(p); if (!p.bot) this.send(p.id, this.spawnMsg(p)); }
@@ -464,11 +495,12 @@ export class GameCore {
       ps.push([p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), f, WEAPON_ORDER.indexOf(p.weapon), Math.ceil(p.hp), Math.ceil(p.armor), p.kills, p.deaths, p.hs]);
     }
     const tl = this.intermission ? 0 : Math.max(0, Math.ceil(this.timeLimit - (t - this.matchStart)));
-    this.broadcast({ t: 'snap', st: r3(t), tl, ps });
+    this.broadcast({ t: 'snap', st: r3(t), tl, ps, ts: this.mode === 'tdm' ? this.teamScore : undefined });
   }
 
   // ---------------------------------------------------------------- bots
   botAlert(b, a) {
+    if (!this.foes(b, a)) return;
     if (!b.target || Math.random() < 0.5) {
       if (lineOfSight(this.map, b.x, b.z, a.x, a.z)) { if (b.target !== a) { b.target = a; b.reactUntil = this.time + 0.2; b.aimT = 0; } }
       else { b.lastSeen = { x: a.x, z: a.z, t: this.time }; b.path = null; b.goal = null; }
@@ -479,7 +511,7 @@ export class GameCore {
     let best = null, bd = 36;
     const fx = -Math.sin(b.yaw), fz = -Math.cos(b.yaw);
     for (const o of this.players.values()) {
-      if (o === b || !o.alive) continue;
+      if (!o.alive || !this.foes(b, o)) continue;
       const dx = o.x - b.x, dz = o.z - b.z, d = Math.hypot(dx, dz);
       if (d >= bd) continue;
       const facing = (dx * fx + dz * fz) / (d || 1);
@@ -513,7 +545,7 @@ export class GameCore {
       }
       if (!b.target) {
         for (const n of this.noises) {
-          if (n.src === b || Math.hypot(n.x - b.x, n.z - b.z) > n.r) continue;
+          if (n.src === b || (n.src && !this.foes(b, n.src)) || Math.hypot(n.x - b.x, n.z - b.z) > n.r) continue;
           if (!b.lastSeen || t - b.lastSeen.t > 2) { b.lastSeen = { x: n.x, z: n.z, t }; b.path = null; b.goal = null; }
         }
       }
