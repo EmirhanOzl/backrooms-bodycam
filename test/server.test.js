@@ -30,3 +30,49 @@ test('server serves the game and runs a multiplayer session', async () => {
     await srv.close();
   }
 });
+
+test('web clients see and keep the selected online bot count', async () => {
+  const srv = await startGameServer({ port: 0, host: '127.0.0.1', bots: 3, log: () => {} });
+  const sockets = [];
+  const base = `http://127.0.0.1:${srv.port}`;
+  const waitFor = async (condition) => {
+    for (let i = 0; i < 100; i++) {
+      if (condition()) return;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.fail('timed out waiting for server state');
+  };
+  const connect = async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`);
+    sockets.push(ws);
+    const messages = [];
+    ws.on('message', (d) => messages.push(JSON.parse(d)));
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    return { ws, messages };
+  };
+  try {
+    const a = await connect();
+    a.ws.send(JSON.stringify({ t: 'join', name: 'A', bots: 2 }));
+    await waitFor(() => a.messages.some((m) => m.t === 'welcome'));
+    assert.equal(a.messages.find((m) => m.t === 'welcome').bots, 2);
+    const firstInfo = await (await fetch(base + '/info')).json();
+    assert.equal(firstInfo.players, 1);
+    assert.equal(firstInfo.bots, 2);
+    assert.equal(firstInfo.selectedBots, 2);
+
+    const b = await connect();
+    b.ws.send(JSON.stringify({ t: 'join', name: 'B', bots: 10 }));
+    await waitFor(() => b.messages.some((m) => m.t === 'welcome'));
+    assert.equal(b.messages.find((m) => m.t === 'welcome').bots, 2);
+    const info = await (await fetch(base + '/info')).json();
+    assert.equal(info.players, 2);
+    assert.equal(info.bots, 2);
+    b.ws.close();
+    a.ws.close();
+    await waitFor(() => srv.core.onlineBotCount === null);
+    assert.equal((await (await fetch(base + '/info')).json()).bots, 3);
+  } finally {
+    for (const ws of sockets) ws.terminate();
+    await srv.close();
+  }
+});

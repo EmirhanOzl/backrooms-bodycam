@@ -19,6 +19,50 @@ function duel(seed = 1234) {
   return { core, a, v, inbox };
 }
 
+test('first online player chooses an exact bot count for the session', () => {
+  const core = new GameCore({ bots: 5, seed: 17 });
+  const inbox = { a: [], b: [], c: [] };
+  const botCount = () => [...core.players.values()].filter((p) => p.bot).length;
+  for (const id of Object.keys(inbox)) core.join(id, (m) => inbox[id].push(m));
+
+  core.handle('a', { t: 'join', name: 'A', bots: 0 });
+  assert.equal(core.onlineBotCount, 0);
+  assert.equal(botCount(), 0);
+  assert.equal(inbox.a.find((m) => m.t === 'welcome').bots, 0);
+
+  core.handle('b', { t: 'join', name: 'B', bots: 10 });
+  assert.equal(core.onlineBotCount, 0, 'later players cannot change the count');
+  assert.equal(botCount(), 0);
+  assert.equal(inbox.b.find((m) => m.t === 'welcome').bots, 0);
+  core.newMatch();
+  assert.equal(botCount(), 0, 'new rounds keep the chosen count');
+  core.leave('a');
+  assert.equal(core.onlineBotCount, 0);
+  core.leave('b');
+  assert.equal(core.onlineBotCount, null, 'the next session can choose again');
+  assert.equal(botCount(), 5, 'idle server returns to its configured default');
+
+  core.handle('c', { t: 'join', name: 'C', bots: 10 });
+  assert.equal(core.onlineBotCount, 10);
+  assert.equal(botCount(), 10);
+  core.newMatch();
+  assert.equal(botCount(), 10);
+});
+
+test('online join rejects bot counts outside 0 to 10', () => {
+  const core = new GameCore({ bots: 5, seed: 18 });
+  const messages = [];
+  core.join('a', (m) => messages.push(m));
+  for (const bots of [-1, 11, 1.5, '5', null]) {
+    core.handle('a', { t: 'join', name: 'A', bots });
+    assert.equal(core.players.has('a'), false);
+    assert.equal(messages.at(-1)?.t, 'error');
+  }
+  core.handle('a', { t: 'join', name: 'A', bots: 5 });
+  assert.equal(core.onlineBotCount, 5);
+  assert.equal([...core.players.values()].filter((p) => p.bot).length, 5);
+});
+
 test('bots play full matches without errors and the match cycles to a new level', () => {
   const core = new GameCore({ bots: 9, difficulty: 2, fragLimit: 12, timeLimit: 200, seed: 42 });
   const seen = {};

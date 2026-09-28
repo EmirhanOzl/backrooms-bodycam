@@ -44,6 +44,7 @@ export class GameCore {
   constructor(opts = {}) {
     this.size = opts.size ?? 18;
     this.botTarget = opts.bots ?? 5;      // desired total participants, filled with bots
+    this.onlineBotCount = null;           // exact bot count chosen by the first online player
     this.difficulty = clamp(opts.difficulty ?? 1, 0, 2);
     this.fragLimit = opts.fragLimit ?? 25;
     this.timeLimit = opts.timeLimit ?? 600;
@@ -77,7 +78,10 @@ export class GameCore {
   join(id, send) { this.clients.set(id, { send, player: null }); }
   leave(id) {
     this.clients.delete(id);
-    if (this.players.delete(id)) { this.syncBots(); this.broadcastRoster(); }
+    if (this.players.delete(id)) {
+      if (![...this.players.values()].some((p) => !p.bot)) this.onlineBotCount = null;
+      this.syncBots(); this.broadcastRoster();
+    }
   }
   send(id, msg) { const c = this.clients.get(id); if (c) c.send(msg); }
   broadcast(msg, except) { for (const [id, c] of this.clients) if (id !== except && c.player) c.send(msg); }
@@ -87,6 +91,17 @@ export class GameCore {
     if (!c || !msg || typeof msg.t !== 'string') return;
     if (msg.t === 'join') {
       if (c.player) return;
+      if (msg.bots !== undefined && (!Number.isInteger(msg.bots) || msg.bots < 0 || msg.bots > 10)) {
+        this.send(id, { t: 'error', message: 'Bot sayısı 0 ile 10 arasında olmalı.' });
+        return;
+      }
+      if (msg.bots !== undefined && ![...this.players.values()].some((p) => !p.bot)) {
+        this.onlineBotCount = msg.bots;
+        this.newLevel((Math.random() * 1e9) | 0);
+        this.teamScore = [0, 0];
+        this.syncBots();
+        for (const p of this.players.values()) { this.resetStats(p); this.spawn(p); }
+      }
       const name = String(msg.name || 'Oyuncu').replace(/[<>&"]/g, '').trim().slice(0, 16) || 'Oyuncu';
       const p = this.makePlayer(id, name, false);
       this.assignTeam(p);
@@ -98,6 +113,7 @@ export class GameCore {
         t: 'welcome', id, seed: this.seed, size: this.size, light: this.light, crates: this.crates.map((k) => (k.open ? 1 : 0)),
         drops: [...this.drops.values()].map(dropMsg), fragLimit: this.fragLimit, timeLimit: this.timeLimit, st: r3(this.time),
         mode: this.mode, team: p.team, teamScore: this.teamScore, cash: p.cash,
+        bots: this.onlineBotCount ?? [...this.players.values()].filter((p) => p.bot).length,
       });
       this.broadcastRoster();
       this.send(id, this.spawnMsg(p));
@@ -152,7 +168,7 @@ export class GameCore {
 
   syncBots() {
     const humans = [...this.players.values()].filter((p) => !p.bot).length;
-    const want = Math.max(0, this.botTarget - humans);
+    const want = this.onlineBotCount ?? Math.max(0, this.botTarget - humans);
     const bots = [...this.players.values()].filter((p) => p.bot);
     if (bots.length > want) {
       for (let n = bots.length - want; n > 0; n--) {
