@@ -2,7 +2,7 @@
 
 Backrooms Seviye 0 (sarı duvar kağıtlı, nemli halılı, floresan uğultulu labirent) haritasında geçen,
 göğüs kamerası (bodycam) görüntülü, tarayıcıda oynanan taktiksel 3D FPS. Botlara karşı çevrimdışı veya
-yerel ağda PvP. Harita her maçta tohumdan yeniden üretilir; model, doku ve seslerin hepsi kodla üretilir.
+yerel ağda veya internette PvP. Harita her maçta tohumdan yeniden üretilir; model, doku ve seslerin hepsi kodla üretilir.
 
 ## Çalıştırma
 
@@ -30,6 +30,27 @@ npm run e2e        # gerçek tarayıcıda uçtan uca duman testi (bir kez: npx p
 Sunucu ayarları (ortam değişkenleri): `PORT` (3000), `BOTS` (toplam katılımcı hedefi, 5), `DIFF` (0/1/2),
 `FRAGS` (leş / takım skor limiti, 25), `TIME` (maç süresi, saniye, 600), `MODE` (`ffa` veya `tdm`),
 `LIGHT` (`normal`, `dim` veya `dark`).
+
+### İnternette arkadaşlarla ücretsiz oynama (Render)
+
+Bu proje hem web sayfasını hem de çok oyunculu oyunu aynı Node sunucusunda çalıştırır. Yalnızca statik site
+olarak yayımlamak çok oyunculu bağlantıyı çalıştırmaz. Kök dizindeki `render.yaml`, ücretsiz Web Service
+ayarlarını içerir; oyun ve masaüstü sürümünün yerel ayarlarını değiştirmez.
+
+1. Bu dalı GitHub'a gönder. Depo özel kalabilir; Render'a yalnızca bu depoya erişim ver.
+2. [Render](https://dashboard.render.com/)'da **New → Blueprint** seç, GitHub deposunu ve `render.yaml` dosyasının
+   bulunduğu dalı bağla. Oluşturulacak hizmetin **Free** planında olduğunu kontrol et.
+3. İlk dağıtım tamamlanınca hizmetin verdiği `https://…onrender.com` adresini aç. `ÇOK OYUNCULU` panelinde
+   **Sunucu aktif** yazısını gör ve `SUNUCUYA KATIL` ile dene.
+4. Aynı `https://…onrender.com` adresini Discord'da arkadaşlarınla paylaş. Herkes aynı adresi açıp
+   `ÇOK OYUNCULU → SUNUCUYA KATIL` seçer; tek ortak maça katılır.
+
+Ücretsiz hizmet 15 dakika bağlantı/istek gelmezse uyur; ilk açılış yaklaşık bir dakika sürebilir. Hizmet
+yeniden başlarsa mevcut maç ve bağlantılar sıfırlanır; oyuncular sayfayı yenileyip tekrar katılabilir.
+Render'ın ücretsiz planı 0,1 CPU, 512 MB RAM ve çalışma alanı başına aylık 5 GB dış trafik içerir.
+Trafik sınırı aşılırsa ödeme yöntemi olan hesapta ücret doğabilir; ödeme yöntemi olmayan hesapta hizmet
+ayın kalanında durur. Bu yüzden kullanım sayfasını kontrol et. Bağlantıya sahip herkes maça katılabilir;
+bu sürümde özel oda veya parola yoktur.
 
 ## Kontroller
 
