@@ -2140,6 +2140,6 @@ if (location.protocol.startsWith('http')) {
     }
     const message = privateNetwork ? 'Sunucu aktif. Aynı ağdaki arkadaşların şu adresi açabilir:' : 'Sunucu aktif. Discord\'da arkadaşlarınla şu adresi paylaş:';
     $('onlineInfo').innerHTML = `${message}<br><b class="addr">${esc(addresses[0])}</b>${addresses.length > 1 ? `<br><span class="small">${addresses.slice(1).map(esc).join(' · ')}</span>` : ''}`;
-  }).catch(() => { $('onlineInfo').textContent = 'Sunucuya bağlanılamadı. Birazdan tekrar dene veya sayfayı yenile.'; });
+  }).catch(() => { $('onlineInfo').textContent = 'Sunucuya bağlanılamadı. Sayfayı yenileyip tekrar dene.'; });
 } else $('onlineInfo').textContent = 'Çok oyunculu oynamak için oyunu bir web adresinden aç.';
 game.boot().catch((e) => { console.error(e); $('loadtext').textContent = 'Başlatma hatası: ' + e.message; });
