@@ -20,14 +20,15 @@ npm run e2e        # gerçek tarayıcıda uçtan uca duman testi (bir kez: npx p
   Maç simülasyonu tarayıcıda ayrı bir Web Worker'da çalışır; `public/` klasörü herhangi bir statik
   sunucuda da oynanır (ES modülleri `file://` üzerinden açılamaz, bir HTTP sunucusu şart).
 - **Çok oyunculu (PvP):** `npm start` konsolda yerel ağ adresini yazar (ör. `http://192.168.1.20:3000`).
-  Arkadaşların bu adresi açıp `ÇOK OYUNCULU → SUNUCUYA KATIL` der. Boş yerleri botlar doldurur.
+  İlk katılan oyuncu `ÇOK OYUNCULU` menüsünden 0–10 bot seçer ve `SUNUCUYA KATIL` der. Arkadaşları aynı adresi
+  açıp katılır. Sonradan katılan oyuncular bot sayısını değiştirmez; herkes ayrılınca yeni seçim yapılabilir.
 
 - **Masaüstü sürümü (Steam / itch.io için):** `npm run desktop` — Electron penceresinde tam ekran açılır (F11 pencere
   modu), oyun sunucusu uygulamanın içinde çalışır: tek oyunculu oynarken aynı anda yerel ağda host olursun, adres
   `ÇOK OYUNCULU` panelinde görünür. Arka planda kısılma yoktur; `ÇIKIŞ` menüden kapatır. (`desktop/` klasörü kendi
   `package.json`'ına sahiptir; tarayıcı sürümü Electron indirmez.)
 
-Sunucu ayarları (ortam değişkenleri): `PORT` (3000), `BOTS` (toplam katılımcı hedefi, 5), `DIFF` (0/1/2),
+Sunucu ayarları (ortam değişkenleri): `PORT` (3000), `BOTS` (eski istemciler ve boş sunucu için toplam katılımcı hedefi, 5), `DIFF` (0/1/2),
 `FRAGS` (leş / takım skor limiti, 25), `TIME` (maç süresi, saniye, 600), `MODE` (`ffa` veya `tdm`),
 `LIGHT` (`normal`, `dim` veya `dark`).
 

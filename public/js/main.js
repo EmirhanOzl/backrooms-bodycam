@@ -200,6 +200,7 @@ class Game {
     this.buildAttract();
     if (document.pointerLockElement) document.exitPointerLock();
     this.sound.setHum?.(0.7);
+    refreshOnlineStatus();
   }
 
   // slow bodycam drift through the empty level behind the menu
@@ -254,7 +255,7 @@ class Game {
       return;
     }
     this.net = net;
-    net.send({ t: 'join', name: settings.name });
+    net.send({ t: 'join', name: settings.name, ...(mode === 'online' ? { bots: settings.onlineBots } : {}) });
     let welcome = null;
     const pending = [];
     for (let i = 0; i < 300 && !welcome && !net.closed; i++) {
@@ -323,6 +324,7 @@ class Game {
 
   quitToMenu() {
     saveCareer();
+    if (this.net?.online) this.net.ws.addEventListener('close', () => refreshOnlineStatus(), { once: true });
     if (this.net) this.net.close();
     this.net = null;
     for (const r of this.remotes.values()) this.scene.remove(r.model.root);
@@ -2102,6 +2104,7 @@ for (const b of document.querySelectorAll('#nav button[data-p]')) {
     document.querySelectorAll('.menu-right .panel').forEach((p) => p.classList.toggle('hidden', p.id !== 'p-' + b.dataset.p));
     if (b.dataset.p === 'settings') $('settingsHome').appendChild($('settingsBox'));
     if (b.dataset.p === 'profile') $('careerBox').innerHTML = careerHtml();
+    if (b.dataset.p === 'online') refreshOnlineStatus();
   };
   b.onmouseenter = () => game.sound.ui('ui_hover', 0.3);
 }
@@ -2117,29 +2120,54 @@ $('gmode').onchange = () => { settings.mode = $('gmode').value; saveSettings(); 
 $('glight').value = settings.light;
 $('glight').onchange = () => { settings.light = $('glight').value; saveSettings(); };
 $('bots').oninput = () => { settings.bots = +$('bots').value; $('botsv').textContent = settings.bots; saveSettings(); };
+$('onlineBots').value = settings.onlineBots; $('onlineBotsv').textContent = settings.onlineBots;
+$('onlineBots').oninput = () => { settings.onlineBots = +$('onlineBots').value; $('onlineBotsv').textContent = settings.onlineBots; saveSettings(); };
 $('diff').onchange = () => { settings.diff = +$('diff').value; saveSettings(); };
 $('frags').onchange = () => { settings.frags = +$('frags').value; saveSettings(); };
 $('mtime').onchange = () => { settings.time = +$('mtime').value; saveSettings(); };
 $('btnCareerReset').onclick = () => { if (confirm('Tüm kariyer istatistikleri silinsin mi?')) { resetCareer(); $('careerBox').innerHTML = careerHtml(); } };
 let onlineOk = false;
+let onlineProbe = 0;
 $('btnOffline').onclick = () => game.start('offline');
 $('btnOnline').onclick = () => { if (onlineOk) game.start('online'); };
-if (location.protocol.startsWith('http')) {
-  Net.online(1500).then(async (n) => {
-    n.close(); onlineOk = true;
+async function refreshOnlineStatus() {
+  const probe = ++onlineProbe;
+  onlineOk = false;
+  $('btnOnline').disabled = true;
+  if (!location.protocol.startsWith('http')) {
+    $('onlineInfo').textContent = 'Çok oyunculu oynamak için oyunu bir web adresinden aç.';
+    return;
+  }
+  $('onlineInfo').textContent = 'Sunucu kontrol ediliyor…';
+  try {
+    const net = await Net.online(4000);
+    net.close();
+    const response = await fetch('/info', { cache: 'no-store' });
+    if (!response.ok) throw new Error('server info unavailable');
+    const info = await response.json();
+    if (probe !== onlineProbe) return;
+    onlineOk = true;
     $('btnOnline').disabled = false;
+    const active = info.players > 0;
+    const count = active ? (info.selectedBots ?? info.bots) : settings.onlineBots;
+    $('onlineBots').disabled = active;
+    $('onlineBots').value = count;
+    $('onlineBotsv').textContent = count;
+    $('onlineBotsNote').textContent = active
+      ? `Aktif maçta ${info.players} oyuncu ve ${info.bots} bot var. Herkes ayrılınca yeni bot sayısı seçilebilir.`
+      : '0–10 bot seçebilirsin. İlk katılan oyuncunun seçimi bu maç için geçerli olur.';
     const host = location.hostname;
     const loopback = host === 'localhost' || host === '[::1]' || /^127\./.test(host);
     const privateNetwork = loopback || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
     let addresses = [location.origin];
     if (loopback) {
-      try {
-        const info = await (await fetch('/info')).json();
-        if (info.lan?.length) addresses = info.lan.map((ip) => `http://${ip}:${info.port}`);
-      } catch { /* keep the current address */ }
+      if (info.lan?.length) addresses = info.lan.map((ip) => `http://${ip}:${info.port}`);
     }
     const message = privateNetwork ? 'Sunucu aktif. Aynı ağdaki arkadaşların şu adresi açabilir:' : 'Sunucu aktif. Discord\'da arkadaşlarınla şu adresi paylaş:';
     $('onlineInfo').innerHTML = `${message}<br><b class="addr">${esc(addresses[0])}</b>${addresses.length > 1 ? `<br><span class="small">${addresses.slice(1).map(esc).join(' · ')}</span>` : ''}`;
-  }).catch(() => { $('onlineInfo').textContent = 'Sunucuya bağlanılamadı. Sayfayı yenileyip tekrar dene.'; });
-} else $('onlineInfo').textContent = 'Çok oyunculu oynamak için oyunu bir web adresinden aç.';
+  } catch {
+    if (probe === onlineProbe) $('onlineInfo').textContent = 'Sunucuya bağlanılamadı. Sayfayı yenileyip tekrar dene.';
+  }
+}
+refreshOnlineStatus();
 game.boot().catch((e) => { console.error(e); $('loadtext').textContent = 'Başlatma hatası: ' + e.message; });

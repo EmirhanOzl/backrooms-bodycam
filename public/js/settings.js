@@ -39,7 +39,7 @@ export const DEFAULTS = {
   name: 'Gezgin', sens: 1, adsSens: 1, rawInput: true, invertY: false, holdAds: true, holdCrouch: true, xh: { ...XH_DEFAULT }, hitmarks: true,
   quality: 1, fov: 80, lens: 1, shake: 1, blur: true, bright: 1, fps: false,
   master: 0.8, sfx: 1, amb: 0.8, ui: 0.9, hrtf: true,
-  bots: 6, diff: 1, frags: 20, time: 10, mode: 'ffa', light: 'normal',
+  bots: 6, onlineBots: 5, diff: 1, frags: 20, time: 10, mode: 'ffa', light: 'normal',
   binds: DEFAULT_BINDS, bindsV: 2,
 };
 
@@ -59,6 +59,7 @@ function load() {
   }
   s.bindsV = 2;
   s.xh = { ...XH_DEFAULT, ...(saved.xh && typeof saved.xh === 'object' ? saved.xh : {}) };
+  if (!Number.isInteger(s.onlineBots) || s.onlineBots < 0 || s.onlineBots > 10) s.onlineBots = DEFAULTS.onlineBots;
   if (!saved.xh) { // settings from before the editor
     if (saved.xstyle === 'off' || saved.xhair === false) s.xh.show = false;
     if (saved.xstyle === 'dot') s.xh.lines = false;
