@@ -2128,9 +2128,18 @@ if (location.protocol.startsWith('http')) {
   Net.online(1500).then(async (n) => {
     n.close(); onlineOk = true;
     $('btnOnline').disabled = false;
-    let lan = [];
-    try { const info = await (await fetch('/info')).json(); lan = info.lan.map((ip) => `http://${ip}:${info.port}`); } catch { /* older server */ }
-    $('onlineInfo').innerHTML = `Sunucu aktif. Aynı ağdaki arkadaşların şu adresi açarak katılabilir:<br><b class="addr">${esc(lan[0] || location.origin)}</b>${lan.length > 1 ? `<br><span class="small">${lan.slice(1).map(esc).join(' · ')}</span>` : ''}`;
-  }).catch(() => { $('onlineInfo').textContent = 'Sunucu bulunamadı. Çok oyunculu için "npm start" ile sunucuyu başlat.'; });
-} else $('onlineInfo').textContent = 'Dosyadan açıldı. Çok oyunculu için "npm start" ile sunucuyu başlat.';
+    const host = location.hostname;
+    const loopback = host === 'localhost' || host === '[::1]' || /^127\./.test(host);
+    const privateNetwork = loopback || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+    let addresses = [location.origin];
+    if (loopback) {
+      try {
+        const info = await (await fetch('/info')).json();
+        if (info.lan?.length) addresses = info.lan.map((ip) => `http://${ip}:${info.port}`);
+      } catch { /* keep the current address */ }
+    }
+    const message = privateNetwork ? 'Sunucu aktif. Aynı ağdaki arkadaşların şu adresi açabilir:' : 'Sunucu aktif. Discord\'da arkadaşlarınla şu adresi paylaş:';
+    $('onlineInfo').innerHTML = `${message}<br><b class="addr">${esc(addresses[0])}</b>${addresses.length > 1 ? `<br><span class="small">${addresses.slice(1).map(esc).join(' · ')}</span>` : ''}`;
+  }).catch(() => { $('onlineInfo').textContent = 'Sunucuya bağlanılamadı. Birazdan tekrar dene veya sayfayı yenile.'; });
+} else $('onlineInfo').textContent = 'Çok oyunculu oynamak için oyunu bir web adresinden aç.';
 game.boot().catch((e) => { console.error(e); $('loadtext').textContent = 'Başlatma hatası: ' + e.message; });
