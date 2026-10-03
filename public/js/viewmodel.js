@@ -30,25 +30,27 @@ function kf(u, keys) {
 // iron-sight hold (deg): the aligned sights sit this far under the aim point, so the target stands on top of the
 // front post instead of behind it ("6 o'clock hold"; red dot / scope: none), muzzle flash size
 const POSE = {
-  pistol: { hip: [0.09, -0.165, -0.41], D: 0.6, hold: 1.0, flash: 0.14 },
-  revolver: { hip: [0.09, -0.16, -0.41], D: 0.62, hold: 1.0, flash: 0.18 },
-  smg: { hip: [0.08, -0.225, -0.44], D: 0.82, hold: 0.9, flash: 0.18 },
-  shotgun: { hip: [0.08, -0.23, -0.5], D: 1.3, hold: 0.7, flash: 0.3 },
-  rifle: { hip: [0.08, -0.23, -0.5], D: 1.1, hold: 1.0, flash: 0.24 },
-  m4: { hip: [0.08, -0.225, -0.47], D: 0.36, hold: 0, flash: 0.2 },
-  sniper: { hip: [0.08, -0.24, -0.5], D: 0.34, hold: 0, flash: 0.28 },
+  pistol: { hip: [0.105, -0.165, -0.40], D: 0.58, hold: 0.40, flash: 0.14 },
+  revolver: { hip: [0.105, -0.16, -0.41], D: 0.62, hold: 0.40, flash: 0.18 },
+  smg: { hip: [0.10, -0.215, -0.43], D: 0.80, hold: 0.35, flash: 0.18 },
+  shotgun: { hip: [0.11, -0.225, -0.49], D: 1.22, hold: 0.35, flash: 0.30 },
+  rifle: { hip: [0.105, -0.225, -0.49], D: 1.08, hold: 0.40, flash: 0.24 },
+  m4: { hip: [0.10, -0.215, -0.46], D: 0.46, hold: 0, flash: 0.20 },
+  sniper: { hip: [0.105, -0.235, -0.50], D: 0.27, hold: 0, flash: 0.28 },
   knife: { hip: [0.11, -0.165, -0.3], D: 0.4, hold: 0, flash: 0 },
 };
 const X_AXIS = new THREE.Vector3(1, 0, 0);
+const ZERO = [0, 0, 0], MAG_DOWN = [0, -1];
+const CREATURE_HIP = [0.11, -0.17, -0.27];
 // recoil feel: spring impulses (back/up m/s, pitch/yaw/roll rad/s), spring stiffness/damping, camera shake, fov punch
 export const FEEL = {
-  pistol: { back: 0.9, up: 0.12, pitch: 5.5, yaw: 0.8, roll: 1.2, k: 320, c: 22, cam: 0.08, fov: 0.5 },
-  revolver: { back: 1.3, up: 0.25, pitch: 11, yaw: 1.2, roll: 2.2, k: 240, c: 18, cam: 0.2, fov: 1.0 },
-  smg: { back: 0.55, up: 0.05, pitch: 1.6, yaw: 0.7, roll: 0.9, k: 420, c: 26, cam: 0.05, fov: 0.2 },
-  shotgun: { back: 1.6, up: 0.2, pitch: 7, yaw: 1.4, roll: 2.4, k: 220, c: 16, cam: 0.32, fov: 1.4 },
-  rifle: { back: 0.85, up: 0.08, pitch: 2.4, yaw: 1.0, roll: 1.6, k: 360, c: 24, cam: 0.12, fov: 0.4 },
-  m4: { back: 0.7, up: 0.06, pitch: 1.9, yaw: 0.8, roll: 1.2, k: 380, c: 25, cam: 0.08, fov: 0.3 },
-  sniper: { back: 1.9, up: 0.25, pitch: 8, yaw: 1.0, roll: 2.0, k: 200, c: 15, cam: 0.35, fov: 1.8 },
+  pistol: { back: 0.9, up: 0.14, pitch: 5.5, yaw: 0.7, roll: 1.0, k: 340, c: 26, cam: 0.08, fov: 0.5 },
+  revolver: { back: 1.3, up: 0.26, pitch: 10, yaw: 1.2, roll: 1.8, k: 260, c: 22, cam: 0.2, fov: 1.0 },
+  smg: { back: 0.55, up: 0.08, pitch: 1.8, yaw: 0.6, roll: 0.7, k: 430, c: 30, cam: 0.05, fov: 0.2 },
+  shotgun: { back: 1.65, up: 0.24, pitch: 7.5, yaw: 1.2, roll: 2.0, k: 250, c: 23, cam: 0.32, fov: 1.4 },
+  rifle: { back: 0.9, up: 0.10, pitch: 2.7, yaw: 0.9, roll: 1.3, k: 360, c: 27, cam: 0.12, fov: 0.4 },
+  m4: { back: 0.75, up: 0.09, pitch: 2.1, yaw: 0.7, roll: 1.0, k: 390, c: 29, cam: 0.08, fov: 0.3 },
+  sniper: { back: 1.9, up: 0.27, pitch: 8, yaw: 1.0, roll: 1.8, k: 235, c: 21, cam: 0.35, fov: 1.8 },
   knife: { back: 0, up: 0, pitch: 0, yaw: 0, roll: 0, k: 300, c: 22, cam: 0, fov: 0 },
 };
 const LOW = [-0.24, -0.58, -0.34]; // off-screen left hand (grabbing a fresh magazine / shell)
@@ -56,11 +58,24 @@ const LOW = [-0.24, -0.58, -0.34]; // off-screen left hand (grabbing a fresh mag
 class Spring3 {
   constructor() { this.x = new THREE.Vector3(); this.v = new THREE.Vector3(); this.k = 300; this.c = 22; }
   step(dt) {
-    const n = Math.max(1, Math.ceil(dt / 0.004)), h = dt / n, k = this.k, c = this.c, x = this.x, v = this.v;
-    for (let i = 0; i < n; i++) {
-      v.x += (-k * x.x - c * v.x) * h; v.y += (-k * x.y - c * v.y) * h; v.z += (-k * x.z - c * v.z) * h;
-      x.x += v.x * h; x.y += v.y * h; x.z += v.z * h;
+    if (dt <= 0) return;
+    // Exact damped oscillator transition: constant work and identical settling at any frame rate.
+    const k = this.k, a = this.c * 0.5, w2 = k - a * a;
+    let p, q, s;
+    if (Math.abs(w2) < 1e-6) {
+      const e = Math.exp(-a * dt);
+      p = e * (1 + a * dt); q = e * dt; s = e * (1 - a * dt);
+    } else if (w2 > 0) {
+      const w = Math.sqrt(w2), e = Math.exp(-a * dt), sn = Math.sin(w * dt) / w, cs = Math.cos(w * dt);
+      p = e * (cs + a * sn); q = e * sn; s = e * (cs - a * sn);
+    } else {
+      const w = Math.sqrt(-w2), e1 = Math.exp((-a + w) * dt), e2 = Math.exp((-a - w) * dt), inv = 1 / (2 * w);
+      p = ((a + w) * e1 - (a - w) * e2) * inv;
+      q = (e1 - e2) * inv; s = ((w - a) * e1 + (w + a) * e2) * inv;
     }
+    const r = -k * q, x = this.x, v = this.v, xx = x.x, xy = x.y, xz = x.z;
+    x.set(p * xx + q * v.x, p * xy + q * v.y, p * xz + q * v.z);
+    v.set(r * xx + s * v.x, r * xy + s * v.y, r * xz + s * v.z);
   }
   reset() { this.x.set(0, 0, 0); this.v.set(0, 0, 0); }
 }
@@ -125,7 +140,7 @@ const ANIM = {
   },
   sg_end: { f: (u) => { const k = 1 - smooth(u); return { p: [-0.05 * k, 0.07 * k, 0.08 * k], r: [0.3 * k, 0.25 * k, -0.8 * k], lh: { w: k, at: 'port' } }; }, ev: [] },
   pump: {
-    f: (u) => ({ pump: kf(u, [[0.12, 0], [0.38, 1], [0.46, 1], [0.7, 0]]), p: [0, kf(u, [[0, 0], [0.3, 0.01], [0.7, 0]]), kf(u, [[0.1, 0], [0.38, 0.02], [0.7, 0]])], r: [kf(u, [[0, 0], [0.35, 0.08], [0.8, 0]]), 0, kf(u, [[0, 0], [0.4, 0.1], [0.8, 0]])] }),
+    f: (u) => ({ pump: kf(u, [[0.10, 0], [0.34, 1], [0.46, 1], [0.70, 0], [0.74, -0.025], [0.83, 0]]), p: [0, kf(u, [[0, 0], [0.30, 0.012], [0.65, 0], [0.72, -0.006], [0.88, 0]]), kf(u, [[0.10, 0], [0.34, 0.025], [0.70, 0]])], r: [kf(u, [[0, 0], [0.35, 0.07], [0.70, -0.012], [0.88, 0]]), 0, kf(u, [[0, 0], [0.38, 0.075], [0.82, 0]])] }),
     ev: [[0.2, 'snd:pump_back'], [0.36, 'shell'], [0.55, 'snd:pump_fwd']],
   },
   bolt: {
@@ -211,6 +226,15 @@ export class Viewmodel {
       this.guns[t] = g;
     }
     this.nade = buildGrenade(M); this.nade.visible = false; this.root.add(this.nade);
+    this.role = 'survivor';
+    // The claw hands are the rendered model; this transform carries the existing melee animation anchors.
+    this.creature = new THREE.Group();
+    this.creature.userData = {
+      cls: 'knife', muzzle: new THREE.Vector3(0.04, -0.01, -0.235),
+      gripR: new THREE.Vector3(0.04, 0, -0.05), gripL: new THREE.Vector3(-0.28, -0.015, 0.01),
+      sight: new THREE.Vector3(0, 0.08, -0.15), ads: [0, -0.08, -0.25], adsPitch: 0,
+    };
+    this.creature.visible = false; this.root.add(this.creature);
     this.arms = new FPArms(M);
     this.root.add(this.arms.group);
     this.sp = new Spring3(); this.sr = new Spring3();
@@ -220,22 +244,31 @@ export class Viewmodel {
     this.v = new THREE.Vector3(); this.v2 = new THREE.Vector3();
     this.lh = { w: 0, p: new THREE.Vector3(), r: null };
     this.rh = { w: 0, p: new THREE.Vector3(), r: null };
+    this.handOverrides = { lh: this.lh, rh: this.rh };
     this.side = 1;
   }
 
-  get gun() { return this.guns[this.type]; }
+  get gun() { return this.role === 'monster' ? this.creature : this.guns[this.type]; }
   get cls() { return WEAPONS[this.type]?.cls; }
   get busy() { return !!this.anim; }
   get animName() { return this.anim ? this.anim.name : null; }
-
+  setAppearance(appearance) { this.arms.setAppearance(appearance); }
+  setRole(role) {
+    const next = role === 'monster' ? 'monster' : 'survivor';
+    if (next === this.role) return;
+    this.role = next; this.arms.setRole(next);
+    this.stop(); this.setWeapon(next === 'monster' ? 'knife' : this.type || 'pistol');
+  }
   setWeapon(type) {
-    this.type = type;
-    for (const t of WEAPON_ORDER) this.guns[t].visible = t === type;
+    this.type = this.role === 'monster' ? 'knife' : type;
+    type = this.type;
+    for (const t of WEAPON_ORDER) this.guns[t].visible = this.role !== 'monster' && t === type;
+    this.creature.visible = this.role === 'monster';
     const f = FEEL[type] || FEEL.rifle;
     this.sp.k = this.sr.k = f.k; this.sp.c = this.sr.c = f.c;
-    this.sp.reset(); this.sr.reset();
-    const hip = POSE[type].hip;
-    this.gun.position.set(hip[0], hip[1] - 0.3, hip[2]); // never render a frame at the camera origin
+    this.sp.reset(); this.sr.reset(); this.cycleT = 0;
+    const hip = this.role === 'monster' ? CREATURE_HIP : POSE[type].hip;
+    this.gun.position.set(hip[0], hip[1] - 0.3, hip[2]);
     this.resetParts();
   }
   resetParts() {
@@ -244,6 +277,7 @@ export class Viewmodel {
     if (d.mag) { d.mag.position.set(0, 0, 0); d.mag.rotation.z = 0; d.mag.visible = true; }
     if (d.pump) d.pump.position.x = 0;
     if (d.charge) d.charge.position.x = 0;
+    if (d.carrier) d.carrier.position.x = 0;
     if (d.bolt) { d.bolt.position.x = 0; d.bolt.rotation.x = 0; }
     if (d.crane) d.crane.rotation.x = 0;
     if (d.shell) d.shell.visible = false;
@@ -261,13 +295,13 @@ export class Viewmodel {
   stop() { this.anim = null; this.resetParts(); }
 
   kick(type, ads) {
-    const f = FEEL[type] || FEEL.rifle, a = 1 - ads * 0.55, r = () => Math.random() * 2 - 1;
+    const f = FEEL[type] || FEEL.rifle, a = 1 - ads * 0.55;
     this.sp.v.z += f.back * a;
     this.sp.v.y += f.up * a;
     this.sr.v.x += f.pitch * (1 - ads * 0.45);
-    this.sr.v.y += r() * f.yaw * a;
-    this.sr.v.z += r() * f.roll * a;
-    this.cycleT = 0.07;
+    this.sr.v.y += (Math.random() * 2 - 1) * f.yaw * a;
+    this.sr.v.z += (Math.random() * 2 - 1) * f.roll * a;
+    this.cycleT = 0.09;
     if (this.gun.userData.cyl) this.cylRot = (this.cylRot || 0) + Math.PI / 3;
   }
   bump(pitch, back = 0) { this.sr.v.x += pitch; this.sp.v.z += back; }
@@ -287,36 +321,38 @@ export class Viewmodel {
     }
     const cur = this.anim;
     const pose = cur ? cur.A.f(cur.hold ? 0.5 : Math.min(1, cur.t / cur.dur), this, cur.data) : null;
-    const g = this.gun, d = g.userData, type = this.type, P = POSE[type];
-    const a = st.ads, sk = st.sprintK, bk = st.block, sway = 1 - a * 0.7, inert = 1 - a * 0.6;
+    const g = this.gun, d = g.userData, type = this.type, P = POSE[type], hip = this.role === 'monster' ? CREATURE_HIP : P.hip;
+    const a = this.role === 'monster' ? 0 : st.ads, sk = st.sprintK, bk = st.block, sway = 1 - a * 0.94, inert = 1 - a * 0.90;
     const bob = st.bob, bobAmt = st.bobAmt, dk = st.alive ? 0 : Math.min(1, st.deathT * 2);
     const ap = d.ads;
     const idle = Math.sin(st.time * 1.7) * 0.002 * (1 - a * 0.7);
-    const pp = pose?.p || [0, 0, 0], pr = pose?.r || [0, 0, 0];
+    const pp = pose?.p || ZERO, pr = pose?.r || ZERO;
     const ka = 1 - a * 0.6; // recoil springs are softer on the sights
     g.position.set(
-      lerp(P.hip[0], ap[0], a) + st.swayX * sway + Math.sin(bob) * 0.012 * bobAmt - 0.05 * sk + st.inertX * inert + pp[0] + this.sp.x.x * ka + st.lean * 0.015,
-      lerp(P.hip[1], ap[1], a) + st.swayY * sway - Math.abs(Math.cos(bob)) * 0.012 * bobAmt - 0.04 * sk - 0.4 * dk + idle - st.land * 0.035 + pp[1] + this.sp.x.y * ka + 0.015 * bk,
-      lerp(P.hip[2], ap[2], a) + 0.03 * sk + st.inertZ * inert + pp[2] + this.sp.x.z + 0.1 * bk,
+      lerp(hip[0], ap[0], a) + st.swayX * sway + Math.sin(bob) * 0.012 * bobAmt - 0.05 * sk + st.inertX * inert + pp[0] + this.sp.x.x * ka + st.lean * 0.015 * (1 - a),
+      lerp(hip[1], ap[1], a) + st.swayY * sway - Math.abs(Math.cos(bob)) * 0.012 * bobAmt - 0.04 * sk - 0.4 * dk + idle - st.land * 0.035 + pp[1] + this.sp.x.y * ka + 0.015 * bk,
+      lerp(hip[2], ap[2], a) + 0.03 * sk + st.inertZ * inert + pp[2] + this.sp.x.z + 0.1 * bk,
     );
     g.rotation.set(
       this.sr.x.x * (1 - a * 0.3) - 0.42 * sk + st.swayY * 2 * sway + pr[0] + 0.3 * bk - 0.5 * dk + (d.adsPitch || 0) * a,
       st.swayX * 2.5 * sway + 0.62 * sk + (1 - a) * 0.03 + pr[1] + this.sr.x.y + 0.2 * bk,
-      -st.swayX * 3 * sway + 0.18 * sk + 0.05 * st.crouchK * (1 - a) - st.inertX * 2 * inert + pr[2] + this.sr.x.z - st.lean * 0.12,
+      -st.swayX * 3 * sway + 0.18 * sk + 0.05 * st.crouchK * (1 - a) - st.inertX * 2 * inert + pr[2] + this.sr.x.z - st.lean * 0.12 * (1 - a),
     );
     // animated parts
     this.cycleT = Math.max(0, (this.cycleT || 0) - dt);
-    const cyc = this.cycleT > 0 ? Math.sin(Math.PI * (1 - this.cycleT / 0.07)) : 0;
+    const cycleU = 1 - this.cycleT / 0.09;
+    const cyc = this.cycleT <= 0 ? 0 : cycleU < 0.22 ? smooth(cycleU / 0.22) : cycleU < 0.36 ? 1 : 1 - smooth((cycleU - 0.36) / 0.64);
     if (d.slide) d.slide.position.x = -Math.min(1, Math.max(cyc, st.slideBack ? 1 : 0, pose?.rack ?? 0)) * 0.028;
     if (d.mag) {
-      const m = pose?.mag || 0, dir = d.magDir || [0, -1];
+      const m = pose?.mag || 0, dir = d.magDir || MAG_DOWN;
       d.mag.position.set(dir[0] * m, dir[1] * m, 0);
       d.mag.rotation.z = -(d.magRot || 0) * m;
       d.mag.visible = pose?.magVis ?? true;
     }
     if (d.charge) d.charge.position.x = -Math.max(pose?.rack || 0, type === 'rifle' ? cyc : 0) * (type === 'm4' ? 0.06 : 0.07);
-    if (d.pump) d.pump.position.x = -(pose?.pump || 0) * 0.09;
-    if (d.bolt) { d.bolt.rotation.x = -(pose?.boltRot || 0) * 1.1; d.bolt.position.x = -(pose?.boltPos || 0) * 0.075; }
+    if (d.carrier) d.carrier.position.x = -cyc * 0.035;
+    if (d.pump) d.pump.position.x = -(pose?.pump || 0) * 0.11;
+    if (d.bolt) { d.bolt.rotation.x = -(pose?.boltRot || 0) * 1.1; d.bolt.position.x = -(pose?.boltPos || 0) * 0.10; }
     if (d.crane) d.crane.rotation.x = -(pose?.crane || 0) * 1.25;
     if (d.knife) { d.knife.rotation.x = (pose?.kflip || 0) % (Math.PI * 2); d.knife.rotation.z = d.knifeTilt + (pose?.kspin || 0); }
     if (d.hammer) d.hammer.rotation.z = cyc * 0.5;
@@ -330,7 +366,7 @@ export class Viewmodel {
       d.shell.visible = !!pose?.shell;
       if (d.shell.visible) { d.shell.parent.updateMatrixWorld(true); d.shell.position.copy(d.shell.parent.worldToLocal(this.v.copy(this.lh.p))); }
     }
-    this.arms.update(g, this.cls, { lh: this.lh, rh: this.rh });
+    this.arms.update(g, this.cls, this.handOverrides);
     this.nade.visible = !!pose?.nade;
     if (this.nade.visible) {
       this.nade.position.copy(this.arms.lH.position).add(this.v.set(0.03, 0.03, -0.035).applyQuaternion(this.arms.lH.quaternion));
@@ -352,8 +388,15 @@ export class Viewmodel {
   }
 
   // positions in viewmodel (camera) space
-  muzzle(out) { return out.copy(this.gun.userData.muzzle).applyMatrix4(this.gun.matrixWorld); }
-  ejectPort(out) { return out.copy(this.gun.userData.eject).applyMatrix4(this.gun.matrixWorld); }
+  muzzle(out) {
+    if (this.role === 'monster') return out.set(0, -0.028, -0.175).applyMatrix4(this.arms.rH.matrixWorld);
+    const d = this.gun.userData;
+    return d.muzzleObj ? out.copy(d.muzzleAnchor).applyMatrix4(d.muzzleObj.matrixWorld) : out.copy(d.muzzle).applyMatrix4(this.gun.matrixWorld);
+  }
+  ejectPort(out) {
+    const d = this.gun.userData;
+    return d.ejectObj ? out.copy(d.ejectAnchor).applyMatrix4(d.ejectObj.matrixWorld) : out.copy(d.eject).applyMatrix4(this.gun.matrixWorld);
+  }
   flashSize() { return this.gun.userData.suppressed ? 0.04 : POSE[this.type].flash; }
   // attachments on the first-person gun of a type (rebuilt only when they change)
   setAttachments(type, a) { const g = this.guns[type]; if (g && (g.userData.att | 0) !== (a | 0)) decorateGun(g, type, a, this.M); }

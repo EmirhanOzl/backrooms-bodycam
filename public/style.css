@@ -90,7 +90,7 @@ kbd { font-family: inherit; font-size: 0.92em; color: var(--acc); border: 1px so
 
 #vitals { position: absolute; left: 4vw; bottom: 5vh; width: min(300px, 30vw); font-size: 12px; }
 .bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.bar label { width: 58px; opacity: 0.8; }
+.bar label { width: 94px; opacity: 0.8; font-size: 10px; letter-spacing: 0.03em; }
 .bar.thin { transition: opacity 0.4s; }
 .bar.thin .track { height: 4px; }
 .track { flex: 1; height: 7px; background: rgba(0, 0, 0, 0.5); border: 1px solid rgba(255, 255, 255, 0.25); }
@@ -267,3 +267,40 @@ table.keys .alt { font-size: 11px; opacity: 0.55; margin-left: 4px; }
 #shop .keys { margin-top: 10px; color: var(--dim); font-size: 11px; text-align: center; }
 #shop .keys b { color: var(--acc); }
 #resume { position: absolute; left: 50%; top: 56%; transform: translateX(-50%); font-size: 14px; letter-spacing: 0.2em; color: var(--acc); background: rgba(0, 0, 0, 0.55); padding: 6px 14px; border: 1px solid rgba(232, 197, 71, 0.5); pointer-events: none; animation: blink 1.2s steps(2) infinite; }
+
+/* Operator workshop and expedition instruments share the game's restrained field-kit palette. */
+:focus-visible { outline: 2px solid #9bd7de; outline-offset: 3px; }
+#p-customize { width: min(880px, 94vw); }
+.operator-workshop { display: grid; grid-template-columns: minmax(190px, 0.9fr) minmax(240px, 1.15fr); gap: 20px; align-items: start; }
+.operator-preview { position: sticky; top: 0; min-width: 0; background: radial-gradient(ellipse at 50% 40%, #3a403d 0%, #141918 70%); border: 1px solid #49524d; padding: 10px; }
+.operator-preview canvas { width: 100%; height: 380px; display: block; object-fit: contain; }
+.operator-preview input { width: 100%; accent-color: var(--acc); }
+.operator-preview p { margin: 8px 0 0; font-size: 9px; text-align: center; }
+.operator-choices fieldset { border: 0; padding: 0; margin: 0 0 16px; display: grid; gap: 5px; }
+.operator-choices legend { color: var(--acc); font-size: 11px; letter-spacing: 0.1em; padding: 0 0 7px; }
+.operator-option { text-align: left; margin: 0; padding: 8px 12px; border: 1px solid #484a40; background: #1d211d; color: #d9ddd4; letter-spacing: 0; }
+.operator-option strong { font-size: 12px; display: block; }
+.operator-option small { display: block; font-size: 10px; color: #acb5ab; font-weight: normal; margin-top: 3px; line-height: 1.4; }
+.operator-option[data-part=palette] { border-left: 8px solid var(--swatch); }
+.operator-option:hover, .operator-option.on { background: #303c32; border-color: #b7c798; color: #fff; }
+#escapeObjective { position: absolute; left: 4vw; top: 11vh; max-width: 340px; font-size: 12px; line-height: 1.7; padding: 9px 12px; border-left: 2px solid #a0c5bd; background: rgba(7, 15, 14, 0.7); }
+#escapeObjective strong { display: block; color: #c1e4dc; letter-spacing: 0.1em; }
+#escapeObjective.safe { border-color: #bde890; background: rgba(22, 37, 18, 0.8); }
+#escapeObjective.monster { border-color: #d88273; background: rgba(35, 12, 15, 0.75); }
+#escapeObjective.monster strong { color: #f6aca0; }
+#hitdamage { position: absolute; left: calc(50% + 24px); top: calc(50% + 20px); font-size: 12px; font-weight: bold; color: #e6e2d3; opacity: 0; }
+#hitdamage.show { animation: impactread 0.65s ease-out forwards; }
+#hitdamage.kill { color: #ff796a; }
+@keyframes impactread { 0%, 55% { opacity: 0.9; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-8px); } }
+#movementCue { position: absolute; bottom: 4vh; left: 50%; transform: translateX(-50%); font-size: 10px; color: #c9dcc2; letter-spacing: 0.12em; opacity: 0.7; }
+#mapOverlay { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 5, 5, 0.84); pointer-events: auto; z-index: 9; }
+.map-panel { width: min(700px, 94vw); max-height: 95vh; overflow-y: auto; padding: 14px 20px; background: #101d1d; border: 1px solid #86aca5; box-shadow: 0 12px 80px #000; }
+.map-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.map-heading h2 { font-size: 15px; letter-spacing: 0.14em; color: #d3e8db; margin: 0; }
+.map-heading p { font-size: 11px; color: #97afa7; margin: 6px 0; }
+.map-heading button { margin: 0; flex-shrink: 0; }
+#escapeMap { display: block; width: 100%; max-height: 68vh; object-fit: contain; background: #142222; margin: 8px 0; }
+.map-legend { display: flex; gap: 18px; justify-content: center; font-size: 10px; margin: 10px 0; }
+.map-legend .safe { color: #bce69a; }.map-legend .exit { color: #ffd378; }.map-legend .you { color: #75def5; }
+@media (max-width: 1000px) { .operator-workshop { grid-template-columns: 1fr; } .operator-preview { position: static; } .operator-preview canvas { height: 260px; } #p-customize { max-height: 88vh; } }
+@media (prefers-reduced-motion: reduce) { #resume, #protect { animation: none; } }

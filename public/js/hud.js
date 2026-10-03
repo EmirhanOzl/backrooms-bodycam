@@ -13,7 +13,8 @@ export class Hud {
     this.el = {};
     for (const id of ['hud', 'clock', 'serial', 'timer', 'kd', 'feed', 'xhair', 'hitmark', 'dmg', 'nadewarn', 'aimname', 'prompt', 'toasts', 'streak',
       'hp', 'hpbar', 'ar', 'arbar', 'stbar', 'stam', 'wname', 'wmode', 'mag', 'res', 'slots', 'banner', 'death', 'killer', 'killinfo', 'respawn',
-      'score', 'scorebody', 'fraglimit', 'endscreen', 'fps', 'cook', 'protect', 'weapon', 'cashv', 'cashadd', 'payout', 'shop']) this.el[id] = $(id);
+      'score', 'scorebody', 'fraglimit', 'endscreen', 'fps', 'cook', 'protect', 'weapon', 'cashv', 'cashadd', 'payout', 'shop',
+      'stvalue', 'stamLabel', 'movementCue', 'hitdamage']) this.el[id] = $(id);
     this.cache = {};
     this.nadeEls = [];
   }
@@ -47,13 +48,13 @@ export class Hud {
     this.el.mag.classList.toggle('low', !w.melee && mag <= Math.ceil(cap * 0.25));
     this.el.weapon.classList.toggle('melee', !!w.melee);
   }
-  slots(inv, slot) {
+  slots(inv, slot, role = 'survivor') {
     const parts = [];
     const B = settings.binds;
     if (inv.primary) parts.push(`<span class="${slot === 'primary' ? 'on' : ''}"><b>${keyLabel(B.slot1)}</b>${short(inv.primary.w)}</span>`);
-    parts.push(`<span class="${slot === 'secondary' ? 'on' : ''}"><b>${keyLabel(B.slot2)}</b>${short(inv.secondary.w)}</span>`);
-    parts.push(`<span class="${slot === 'melee' ? 'on' : ''}"><b>${keyLabel(B.slot3)}</b>M9</span>`);
-    parts.push(`<span class="${inv.nades ? '' : 'off'}"><b>${keyLabel(B.nade)}</b>M67 ×${inv.nades}</span>`);
+    if (inv.secondary) parts.push(`<span class="${slot === 'secondary' ? 'on' : ''}"><b>${keyLabel(B.slot2)}</b>${short(inv.secondary.w)}</span>`);
+    parts.push(`<span class="${slot === 'melee' ? 'on' : ''}"><b>${keyLabel(B.slot3)}</b>${role === 'monster' ? 'PENÇE' : 'M9'}</span>`);
+    if (role !== 'monster') parts.push(`<span class="${inv.nades ? '' : 'off'}"><b>${keyLabel(B.nade)}</b>M67 ×${inv.nades}</span>`);
     this.set('slots', 'html', parts.join(''));
   }
   cash(v, add = 0) {
@@ -130,6 +131,13 @@ export class Hud {
     void h.offsetWidth; // restart the CSS animation
     h.className = 'show ' + kind;
   }
+  hitDamage(amount, kill) {
+    const h = this.el.hitdamage;
+    h.textContent = `${kill ? 'ÖLDÜRME · ' : ''}${Math.max(1, Math.round(amount))}`;
+    h.className = '';
+    void h.offsetWidth;
+    h.className = kill ? 'show kill' : 'show';
+  }
   damage(rel, dmg) {
     const d = document.createElement('div');
     d.className = 'arc';
@@ -177,15 +185,16 @@ export class Hud {
     s.className = 'show';
   }
   banner(text) { this.set('banner', 'text', text || ''); }
-  death(show, killer = '', info = '') {
+  death(show, killer = '', info = '', kind = 'dead') {
     this.el.death.classList.toggle('hidden', !show);
+    this.el.death.querySelector('.t').textContent = kind === 'escaped' ? 'ÇIKIŞA ULAŞTIN' : kind === 'spectator' ? 'GÖZLEMCİ KAMERASI' : 'SİNYAL KAYBI';
     if (show) { this.el.killer.textContent = killer; this.el.killinfo.textContent = info; }
   }
   respawn(t) { this.set('respawn', 'text', t > 0 ? `Yeniden doğma: ${t.toFixed(1)} sn` : 'Kamera yeniden başlatılıyor…'); }
-  scoreboard(show, rows, myId, fragLimit, ping, team) {
+  scoreboard(show, rows, myId, fragLimit, ping, team, mode = 'ffa') {
     this.el.score.classList.toggle('hidden', !show);
     if (!show) return;
-    const row = (r, i) => `<tr class="${r.id === myId ? 'me' : ''}${r.alive === false ? ' dead' : ''}"><td>${i + 1}</td><td>${esc(r.name)} ${r.bot ? '<span class="bot">BOT</span>' : ''}</td><td>${r.k}</td><td>${r.d}</td><td>${r.hs}</td></tr>`;
+    const row = (r, i) => `<tr class="${r.id === myId ? 'me' : ''}${r.alive === false ? ' dead' : ''}"><td>${i + 1}</td><td>${esc(r.name)} ${r.bot ? '<span class="bot">BOT</span>' : ''}${mode === 'escape' ? `<span class="bot">${r.role === 'monster' ? 'YARATIK' : r.escaped ? 'ÇIKTI' : r.alive === false ? 'ELENDİ' : 'GEZGİN'}</span>` : ''}</td><td>${r.k}</td><td>${r.d}</td><td>${r.hs}</td></tr>`;
     if (team) {
       const order = team.mine === 1 ? [1, 0] : [0, 1];
       this.el.scorebody.innerHTML = order.map((t) => `<tr class="thead t${t}"><td></td><td>${t === 0 ? 'MAVİ TAKIM' : 'KIRMIZI TAKIM'}${t === team.mine ? ' (SİZ)' : ''}</td><td colspan="3">${team.score[t]}</td></tr>` + rows.filter((r) => r.team === t).map(row).join('')).join('');
@@ -193,21 +202,23 @@ export class Hud {
       return;
     }
     this.el.scorebody.innerHTML = rows.map(row).join('');
-    this.el.fraglimit.textContent = `İlk ${fragLimit} leşe ulaşan maçı kazanır.` + (ping != null ? `  ·  Gecikme: ${ping} ms` : '');
+    this.el.fraglimit.textContent = (mode === 'escape' ? 'Gezginler çıkışa ilerler; yaratık ışıklı odalara giremez.' : `İlk ${fragLimit} leşe ulaşan maçı kazanır.`) + (ping != null ? `  ·  Gecikme: ${ping} ms` : '');
   }
-  endScreen(data, myId, myTeam = -1) {
+  endScreen(data, myId, myTeam = -1, role = 'survivor') {
     const e = this.el.endscreen;
     if (!data) { e.classList.add('hidden'); return; }
     const place = data.table.findIndex((r) => r.id === myId) + 1;
     const me = data.table.find((r) => r.id === myId);
     const tdm = data.mode === 'tdm';
-    const won = tdm ? data.winnerTeam === myTeam : data.winner === myId;
-    const title = tdm
-      ? (data.winnerTeam < 0 ? 'BERABERE' : won ? 'TAKIMIN KAZANDI' : `${data.winnerTeam === 0 ? 'MAVİ' : 'KIRMIZI'} TAKIM KAZANDI`) + ` · ${data.teamScore[0]} — ${data.teamScore[1]}`
+    const expedition = data.mode === 'escape';
+    const won = expedition ? (data.outcome === 'escaped') !== (role === 'monster') : tdm ? data.winnerTeam === myTeam : data.winner === myId;
+    const title = expedition
+      ? (data.outcome === 'escaped' ? 'GEZGİNLER KURTULDU' : data.outcome === 'timeout' ? 'KARANLIK KAZANDI · SÜRE DOLDU' : 'YARATIK KAZANDI')
+      : tdm ? (data.winnerTeam < 0 ? 'BERABERE' : won ? 'TAKIMIN KAZANDI' : `${data.winnerTeam === 0 ? 'MAVİ' : 'KIRMIZI'} TAKIM KAZANDI`) + ` · ${data.teamScore[0]} — ${data.teamScore[1]}`
       : won ? 'MAÇI KAZANDIN' : `${esc(data.name || '—')} MAÇI KAZANDI`;
     e.innerHTML = `<div class="panel end">
       <div class="endtitle ${won ? 'won' : ''}">${title}</div>
-      <div class="endsub">${place ? `${place}. SIRA` : ''}${me ? ` · ${me.k} LEŞ · ${me.d} ÖLÜM · %${me.acc} İSABET · ${me.hs} KAFADAN · EN İYİ SERİ ${me.best}` : ''}</div>
+      <div class="endsub">${expedition ? `ÇIKIŞA ULAŞAN ${data.escaped ?? 0} / ${data.total ?? 0} · ${role === 'monster' ? 'YARATIK' : 'GEZGİN'}` : `${place ? `${place}. SIRA` : ''}${me ? ` · ${me.k} LEŞ · ${me.d} ÖLÜM · %${me.acc} İSABET · ${me.hs} KAFADAN · EN İYİ SERİ ${me.best}` : ''}`}</div>
       <table><thead><tr><th>#</th><th>OPERATÖR</th><th>LEŞ</th><th>ÖLÜM</th><th>KAFA</th><th>İSABET</th><th>HASAR</th><th>KAZANÇ</th></tr></thead><tbody>
       ${data.table.map((r, i) => `<tr class="${r.id === myId ? 'me' : ''}"><td>${i + 1}</td><td>${tdm ? `<span class="tdot t${r.team}"></span>` : ''}${esc(r.name)} ${r.bot ? '<span class="bot">BOT</span>' : ''}</td><td>${r.k}</td><td>${r.d}</td><td>${r.hs}</td><td>%${r.acc}</td><td>${r.dmg}</td><td>$${r.cash ?? 0}</td></tr>`).join('')}
       </tbody></table>

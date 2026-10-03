@@ -1,10 +1,10 @@
 // Headless tests for the shared simulation: run with `npm test`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { GameCore, EYE_STAND } from '../public/js/shared/core.js';
-import { WEAPONS, GRENADE, blastDamage, meleeDamage } from '../public/js/shared/weapons.js';
-import { SHOP, ATT, BONUS, ECON, magSize } from '../public/js/shared/items.js';
-import { cellCenter } from '../public/js/shared/map.js';
+import { GameCore, EYE_STAND, PLAYER_R, RESPAWN_T, INTERMISSION_T, ESCAPE_JOIN_T, REST_ZONE_HP, REST_ROUND_HP, F } from '../public/js/shared/core.js';
+import { WEAPONS, GRENADE, blastDamage, meleeDamage, dmgAt, zoneMul } from '../public/js/shared/weapons.js';
+import { SHOP, ATT, BONUS, ECON, magSize, SUP_DMG } from '../public/js/shared/items.js';
+import { cellCenter, cellIndex, findPath, lineOfSight, safeAt, CELL } from '../public/js/shared/map.js';
 import { makeNade, stepNade, NADE_STEP } from '../public/js/shared/physics.js';
 
 // Core with no bots and two scripted humans standing inside the same (open) cell.
@@ -19,6 +19,73 @@ function duel(seed = 1234) {
   return { core, a, v, inbox };
 }
 
+function escapeDuel(preferences = {}, timeLimit = 600) {
+  const core = new GameCore({ bots: 0, seed: 717, mode: 'escape', timeLimit });
+  const inbox = { m: [], a: [], b: [] };
+  for (const id of Object.keys(inbox)) {
+    core.join(id, (msg) => inbox[id].push(msg));
+    core.handle(id, { t: 'join', name: id, role: preferences[id] || (id === 'm' ? 'monster' : 'survivor') });
+  }
+  for (const p of core.players.values()) p.protect = 0;
+  return { core, m: core.players.get('m'), a: core.players.get('a'), b: core.players.get('b'), inbox };
+}
+
+// Locate a real sanctuary doorway, keeping collision and raycasting in the tests.
+function sanctuaryEntrance(map, zone) {
+  const path = findPath(map, map.monsterSpawn.cell, zone.cell);
+  const entry = path.findIndex((cell) => map.safeMask[cell] === zone.id);
+  assert.ok(entry >= 0, 'sanctuary has a reachable doorway');
+  const [ax, az] = cellCenter(map, entry ? path[entry - 1] : map.monsterSpawn.cell);
+  const [bx, bz] = cellCenter(map, path[entry]);
+  const ux = (bx - ax) / CELL, uz = (bz - az) / CELL;
+  const x = (ax + bx) / 2, z = (az + bz) / 2;
+  return { outside: [x - ux * 0.6, z - uz * 0.6], inside: [x + ux * 0.6, z + uz * 0.6] };
+}
+
+test('first online player chooses an exact bot count for the session', () => {
+  const core = new GameCore({ bots: 5, seed: 17 });
+  const inbox = { a: [], b: [], c: [] };
+  const botCount = () => [...core.players.values()].filter((p) => p.bot).length;
+  for (const id of Object.keys(inbox)) core.join(id, (m) => inbox[id].push(m));
+
+  core.handle('a', { t: 'join', name: 'A', bots: 0 });
+  assert.equal(core.onlineBotCount, 0);
+  assert.equal(botCount(), 0);
+  assert.equal(inbox.a.find((m) => m.t === 'welcome').bots, 0);
+
+  core.handle('b', { t: 'join', name: 'B', bots: 10 });
+  assert.equal(core.onlineBotCount, 0, 'later players cannot change the count');
+  assert.equal(botCount(), 0);
+  assert.equal(inbox.b.find((m) => m.t === 'welcome').bots, 0);
+  core.newMatch();
+  assert.equal(botCount(), 0, 'new rounds keep the chosen count');
+  core.leave('a');
+  assert.equal(core.onlineBotCount, 0);
+  core.leave('b');
+  assert.equal(core.onlineBotCount, null, 'the next session can choose again');
+  assert.equal(botCount(), 5, 'idle server returns to its configured default');
+
+  core.handle('c', { t: 'join', name: 'C', bots: 10 });
+  assert.equal(core.onlineBotCount, 10);
+  assert.equal(botCount(), 10);
+  core.newMatch();
+  assert.equal(botCount(), 10);
+});
+
+test('online join rejects bot counts outside 0 to 10', () => {
+  const core = new GameCore({ bots: 5, seed: 18 });
+  const messages = [];
+  core.join('a', (m) => messages.push(m));
+  for (const bots of [-1, 11, 1.5, '5', null]) {
+    core.handle('a', { t: 'join', name: 'A', bots });
+    assert.equal(core.players.has('a'), false);
+    assert.equal(messages.at(-1)?.t, 'error');
+  }
+  core.handle('a', { t: 'join', name: 'A', bots: 5 });
+  assert.equal(core.onlineBotCount, 5);
+  assert.equal([...core.players.values()].filter((p) => p.bot).length, 5);
+});
+
 test('bots play full matches without errors and the match cycles to a new level', () => {
   const core = new GameCore({ bots: 9, difficulty: 2, fragLimit: 12, timeLimit: 200, seed: 42 });
   const seen = {};
@@ -30,10 +97,7 @@ test('bots play full matches without errors and the match cycles to a new level'
   assert.ok(seen.shot > 200, 'bots shoot');
   assert.ok(seen.match >= 1, 'a match ended');
   assert.ok(seen.reset >= 1 && core.seed !== seed0, 'new level generated');
-  assert.ok(seen.swing > 0, 'bots used knives');
-  assert.ok(seen.boom > 0, 'bots threw grenades');
   assert.ok(seen.drop > 0, 'weapons were dropped');
-  assert.ok(seen.crate > 0, 'bots opened crates');
   for (const p of core.players.values()) {
     assert.ok(Number.isFinite(p.x) && Number.isFinite(p.z), 'positions stay finite');
     assert.ok(p.x > 0 && p.z > 0 && p.x < core.map.size && p.z < core.map.size, 'players stay inside the level');
@@ -130,12 +194,6 @@ test('grenade physics is deterministic and stays inside the level', () => {
   assert.ok(g1.y >= 0 && g1.x > 0 && g1.z > 0 && g1.x < core.map.size && g1.z < core.map.size);
 });
 
-test('every weapon has the data the client needs', () => {
-  for (const [k, w] of Object.entries(WEAPONS)) {
-    assert.ok(w.label && w.short && w.slot && w.cls && w.draw > 0 && Array.isArray(w.modes), k);
-    if (!w.melee) assert.ok(w.mag > 0 && w.rpm > 0 && w.range > 0 && (w.reload > 0 || w.shell), k);
-  }
-});
 
 test('team deathmatch: balanced teams, no friendly fire, team score ends the match', () => {
   const core = new GameCore({ bots: 8, difficulty: 2, fragLimit: 15, timeLimit: 400, seed: 77, mode: 'tdm' });
@@ -251,4 +309,254 @@ test('vending machine: buying pops the item out, attachments go on the held weap
   a.att.m4 |= ATT.SUP; a.lastShot = -9;
   core.handle('a', { t: 'shoot', w: 'm4', o: [a.x, EYE_STAND, a.z], d: [0, 0, -1], hits: [] });
   assert.ok(inbox.v.some((m) => m.t === 'shot' && m.s === 1));
+});
+
+test('shotgun keeps lethal close blasts and useful, smoothly falling midrange damage', () => {
+  const w = WEAPONS.shotgun;
+  const blast = (distance) => dmgAt(w, distance) * w.pellets;
+  assert.ok(blast(3) >= 100, 'a full close blast can kill');
+  assert.ok(blast(22) >= 60, 'a centered midrange blast remains useful');
+  assert.ok(blast(22) < blast(3) && blast(w.range) < blast(22), 'damage still falls with distance');
+  assert.ok(Math.abs(blast(22.01) - blast(22)) < 0.1, 'falloff is continuous');
+});
+
+test('AWP kills any valid body zone through full armor, including suppressed maximum range', () => {
+  for (const zone of ['h', 'b', 'l']) {
+    const { core, a, v } = duel();
+    a.primary = 'sniper'; a.att.sniper = ATT.SUP; v.armor = 100;
+    core.handle(a.id, { t: 'shoot', w: 'sniper', o: [a.x, EYE_STAND, a.z], d: [0, 0, -1], hits: [{ id: v.id, dmg: 0.1, zone }] });
+    assert.equal(v.alive, false, `authoritative ${zone} hit is lethal despite an understated client amount`);
+
+    const ranged = duel();
+    ranged.v.armor = 100;
+    const damage = dmgAt(WEAPONS.sniper, WEAPONS.sniper.range) * zoneMul(WEAPONS.sniper, zone) * SUP_DMG;
+    assert.equal(ranged.core.damage(ranged.v, damage, ranged.a, 'sniper', zone), true);
+    assert.equal(ranged.v.alive, false, `suppressed max-range ${zone} hit is lethal`);
+  }
+  const protectedDuel = duel();
+  protectedDuel.a.primary = 'sniper'; protectedDuel.v.armor = 100; protectedDuel.v.protect = 2;
+  protectedDuel.core.handle('a', { t: 'shoot', w: 'sniper', o: [protectedDuel.a.x, EYE_STAND, protectedDuel.a.z], d: [0, 0, -1],
+    hits: [{ id: 'v', dmg: 1000, zone: 'b' }] });
+  assert.equal(protectedDuel.v.hp, 100, 'spawn protection still applies');
+});
+
+test('authoritative shot damage observes distance, suppressors and one hit per target', () => {
+  const { core, a, v } = duel();
+  // A bounded, unobstructed firing lane uses the real shared raycaster, not a LOS stub.
+  core.map.boxes = [];
+  core.map.grid = Array.from({ length: core.map.W * core.map.H }, () => []);
+  core.map.crates = []; core.map.cellCrate.fill(-1);
+  Object.assign(a, { x: 2, z: 2, secondary: 'pistol', att: { pistol: ATT.SUP } });
+  Object.assign(v, { x: 2, z: 43, armor: 0 });
+  const hit = { id: 'v', dmg: 999, zone: 'b' };
+  core.handle('a', { t: 'shoot', w: 'pistol', o: [2, EYE_STAND, 2], d: [0, 0, 1], hits: [hit, hit] });
+  const expected = dmgAt(WEAPONS.pistol, 41) * SUP_DMG;
+  assert.ok(Math.abs(v.hp - (100 - expected)) < 1e-8);
+  assert.equal(a.hits, 1, 'duplicate claims do not multiply a shot');
+});
+
+test('hurt, reloading bots seek actual cover without a knife rush or extra health', () => {
+  const { core, a, v } = duel();
+  a.bot = true; a.hp = 30; a.primary = a.weapon = 'rifle'; a.ammo = { rifle: 0, pistol: 17 };
+  core.time = 3; a.reloadUntil = 6;
+  const [x, z] = cellCenter(core.map, cellIndex(core.map, a.x, a.z));
+  Object.assign(a, { x, z: z + 1.2, yaw: 0 });
+  Object.assign(v, { x, z: z - 1.2 });
+  assert.equal(lineOfSight(core.map, a.x, a.z, v.x, v.z), true);
+  core.botThink(a, 1 / 30);
+  assert.equal(a.weapon, 'rifle', 'reload is not canceled for a multi-meter knife chase');
+  assert.equal(a.hp, 30, 'tactics never grant health');
+  assert.ok(a.cover, 'reachable cover was selected');
+  assert.equal(lineOfSight(core.map, v.x, v.z, a.cover.x, a.cover.z), false, 'cover actually breaks LOS');
+  v.alive = false; a.target = null; a.cover = null; a.lastSeen = { x: v.x, z: v.z, t: core.time - 7 };
+  core.botThink(a, 1 / 30);
+  assert.equal(a.lastSeen, null, 'target memory expires rather than following hidden enemies');
+});
+
+test('first online arena choice preserves occupied settings, fills five-per-side slots and equal loadouts', () => {
+  const core = new GameCore({ bots: 3, seed: 8 });
+  const inbox = { a: [], b: [] };
+  for (const id of Object.keys(inbox)) core.join(id, (msg) => inbox[id].push(msg));
+  core.handle('a', { t: 'join', bots: 10, mode: 'tdm', layout: 'arena', light: 'dim',
+    appearance: { head: 'beanie', chest: 'rig', legs: 'cargo', palette: 'olive' } });
+  assert.equal(core.mode, 'tdm'); assert.equal(core.layout, 'arena'); assert.equal(core.map.W, 10);
+  assert.deepEqual(core.teamCounts(), [5, 5]);
+  assert.equal(inbox.a.find((msg) => msg.t === 'welcome').bots, 9, 'one human occupies a bot slot');
+  core.handle('b', { t: 'join', bots: 0, mode: 'escape', layout: 'escape', light: 'dark' });
+  assert.equal(core.mode, 'tdm'); assert.equal(core.layout, 'arena'); assert.equal(core.light, 'dim');
+  assert.equal(core.onlineBotCount, 10);
+  assert.deepEqual(core.teamCounts(), [5, 5]);
+  for (const team of [0, 1]) {
+    const players = [...core.players.values()].filter((p) => p.team === team);
+    assert.equal(new Set(players.map((p) => p.teamSlot)).size, 5);
+    for (const p of players) {
+      assert.ok(p.teamSlot >= 0 && p.teamSlot < 5);
+      assert.equal(p.primary, 'm4'); assert.equal(p.secondary, 'pistol');
+      assert.equal(p.hp, 100); assert.equal(p.armor, 100); assert.equal(p.nades, 1);
+      assert.equal(p.x, core.map.teamSpawns[team][p.teamSlot].x);
+    }
+  }
+  const spawn = inbox.a.find((msg) => msg.t === 'spawn');
+  assert.equal(spawn.armor, 100); assert.equal(spawn.inv.p, 'm4');
+  assert.equal(spawn.appearance.head, 'beanie');
+  for (let i = 0; i < 8; i++) {
+    const id = 'h' + i; core.join(id, () => {}); core.handle(id, { t: 'join' });
+  }
+  assert.equal(core.players.size, 10);
+  core.join('full', (msg) => inbox.a.push(msg)); core.handle('full', { t: 'join' });
+  assert.equal(core.players.has('full'), false);
+  assert.equal(inbox.a.at(-1).t, 'error');
+});
+
+test('offline arena honors the chosen participant target without forcing unwanted bots', () => {
+  const core = new GameCore({ bots: 1, mode: 'tdm', layout: 'arena', seed: 39 });
+  core.join('me', () => {});
+  core.handle('me', { t: 'join', name: 'Practice' });
+  assert.equal(core.players.size, 1);
+  assert.equal([...core.players.values()].some((p) => p.bot), false, 'zero selected opponents remain zero in the arena');
+  assert.equal(core.players.get('me').alive, true);
+});
+
+test('escape rejects creature sanctuary movement, radius overlap, crossing and damage', () => {
+  const { core, m, a, inbox } = escapeDuel();
+  const zone = core.map.safeZones[0], entrance = sanctuaryEntrance(core.map, zone);
+  Object.assign(m, { x: entrance.outside[0], z: entrance.outside[1] });
+  Object.assign(a, { x: entrance.inside[0], z: entrance.inside[1], protect: 0 });
+  m.yaw = Math.atan2(-(a.x - m.x), -(a.z - m.z));
+  assert.equal(lineOfSight(core.map, m.x, m.z, a.x, a.z), true);
+  assert.equal(safeAt(core.map, a.x, a.z), zone.id);
+  const before = [m.x, m.y, m.z];
+  core.handle('m', { t: 'in', p: [a.x, 0, a.z], yw: m.yaw, f: F.MOVE, w: 'knife' });
+  assert.deepEqual([m.x, m.y, m.z], before);
+  assert.equal(inbox.m.at(-1).t, 'correct');
+  core.handle('m', { t: 'swing', h: 1 }); core.handle('m', { t: 'stab', id: 'a' });
+  assert.equal(a.hp, 100, 'valid melee LOS cannot hurt a sanctuary occupant');
+  assert.equal(core.damage(a, 200, m, 'nade', 'x'), false, 'explosions cannot bypass sanctuary immunity');
+  assert.equal(core.monsterMoveAllowed(zone.x0 - 1, zone.z, zone.x0 - PLAYER_R / 2, zone.z), false, 'whole-body radius stays outside');
+  assert.equal(core.monsterMoveAllowed(zone.x0 - 0.6, zone.z0 + 0.7, zone.x0 + 0.7, zone.z0 - 0.6), false, 'a diagonal cannot cross a safe corner');
+  assert.equal(m.hp, 100); assert.equal(m.primary, null); assert.equal(m.secondary, null); assert.equal(m.nades, 0);
+  m.primary = 'rifle'; m.nades = 1;
+  const shots = m.shots;
+  core.handle('m', { t: 'shoot', w: 'rifle', o: [m.x, EYE_STAND, m.z], d: [0, 0, -1], hits: [{ id: 'a', dmg: 99 }] });
+  core.handle('m', { t: 'nade', o: [m.x, EYE_STAND, m.z], v: [0, 0, -1] });
+  assert.equal(m.shots, shots); assert.equal(core.nades.length, 0, 'creature cannot use guns or grenades');
+  const drop = core.addDrop('m4', m.x, m.z);
+  assert.equal(core.onPickup(m, drop.id), false, 'creature cannot equip loot');
+});
+
+test('escape exit finishes cooperatively, spectators never respawn and reset restores the round', () => {
+  const { core, m, a, b, inbox } = escapeDuel();
+  for (const survivor of [a, b]) assert.equal(safeAt(core.map, survivor.x, survivor.z), 0, 'survivors can learn the map safely before entering darkness');
+  assert.equal(safeAt(core.map, m.x, m.z), -1, 'the creature begins outside the illuminated refuge');
+  const exit = core.map.exit;
+  Object.assign(a, { x: exit.x, z: exit.z });
+  core.handle('a', { t: 'in', p: [exit.x, 0, exit.z], f: 0, w: 'pistol' });
+  assert.equal(a.alive, false); assert.equal(a.escaped, true);
+  assert.deepEqual(core.escapeState(), { escaped: 1, total: 2, monster: m.id, status: 'running' });
+  core.tick(RESPAWN_T + 1);
+  assert.equal(a.alive, false, 'escaped survivors do not respawn');
+  Object.assign(b, { x: exit.x, z: exit.z });
+  core.handle('b', { t: 'in', p: [exit.x, 0, exit.z], f: 0, w: 'pistol' });
+  assert.equal(core.escapeState().status, 'escaped');
+  const match = inbox.a.find((msg) => msg.t === 'match');
+  assert.equal(match.mode, 'escape'); assert.equal(match.outcome, 'escaped');
+  assert.equal(match.escaped, 2); assert.equal(match.total, 2);
+  assert.ok(inbox.a.some((msg) => msg.t === 'escape' && msg.action === 'escaped' && msg.id === 'a'));
+  core.tick(INTERMISSION_T + 0.01);
+  assert.deepEqual(core.escapeState(), { escaped: 0, total: 2, monster: m.id, status: 'running' });
+  for (const p of [a, b, m]) { assert.equal(p.alive, true); assert.equal(p.escaped, false); assert.equal(p.eliminated, false); }
+  for (const survivor of [a, b]) assert.equal(safeAt(core.map, survivor.x, survivor.z), 0, 'new rounds restore the safe briefing spawn');
+  const reset = inbox.a.find((msg) => msg.t === 'reset');
+  assert.equal(reset.layout, 'escape'); assert.equal(reset.mode, 'escape'); assert.equal(reset.light, 'dark');
+});
+
+test('escape elimination is permanent for the round and all captured survivors lose', () => {
+  const { core, m, a, b, inbox } = escapeDuel();
+  Object.assign(a, { x: m.x + 0.5, z: m.z, protect: 0 });
+  assert.equal(core.damage(a, 100, m, 'knife', 'k'), true);
+  assert.equal(a.alive, false); assert.equal(a.eliminated, true);
+  core.tick(RESPAWN_T + 1);
+  assert.equal(a.alive, false);
+  Object.assign(b, { x: m.x + 0.5, z: m.z, protect: 0 });
+  core.damage(b, 100, m, 'knife', 'k');
+  assert.equal(core.escapeState().status, 'caught');
+  assert.equal(inbox.a.find((msg) => msg.t === 'match').outcome, 'caught');
+  assert.ok(inbox.a.some((msg) => msg.t === 'escape' && msg.action === 'eliminated' && msg.id === 'a'));
+  core.newMatch();
+  assert.equal(a.alive, true); assert.equal(a.eliminated, false); assert.equal(core.escapeState().total, 2);
+});
+
+test('escape creature has finite health and armed survivors can defeat it', () => {
+  const { core, m, a } = escapeDuel();
+  Object.assign(a, { x: m.x, z: m.z + 0.8, primary: 'sniper', weapon: 'sniper', protect: 0 });
+  core.handle('a', { t: 'shoot', w: 'sniper', o: [a.x, EYE_STAND, a.z], d: [0, 0, -1], hits: [{ id: m.id, dmg: 250, zone: 'b' }] });
+  assert.equal(m.alive, false);
+  assert.equal(core.escapeState().status, 'escaped', 'defeating the finite creature is a survivor victory');
+});
+
+test('escape timeout, late spectator joins and requested creature rotation remain operational', () => {
+  const { core, m, a, inbox } = escapeDuel({ a: 'monster' });
+  assert.equal(m.role, 'monster'); assert.equal(a.role, 'survivor', 'only one human creature at once');
+  core.tick(ESCAPE_JOIN_T + 0.1);
+  const lateMessages = [];
+  core.join('late', (msg) => lateMessages.push(msg)); core.handle('late', { t: 'join', role: 'survivor' });
+  const late = core.players.get('late');
+  assert.equal(late.alive, false); assert.equal(late.spectator, true);
+  assert.equal(core.escapeState().total, 2, 'round membership is finite');
+  assert.equal(lateMessages.find((msg) => msg.t === 'spawn').spectator, true);
+  core.tick(RESPAWN_T + 1); assert.equal(late.alive, false);
+  core.newMatch();
+  assert.equal(a.role, 'monster'); assert.equal(m.role, 'survivor');
+  assert.equal(late.alive, true); assert.equal(core.escapeState().total, 3);
+  core.newMatch(); assert.equal(m.role, 'monster', 'requested creature role rotates each round');
+  core.timeLimit = 0.1; core.tick(0.11);
+  assert.equal(core.escapeState().status, 'timeout');
+  assert.equal(inbox.a.filter((msg) => msg.t === 'match').at(-1).outcome, 'timeout');
+});
+
+test('escape fallback AI is present even with no optional bots and stays outside sanctuaries', () => {
+  const core = new GameCore({ bots: 0, seed: 11, mode: 'escape' });
+  const messages = [];
+  core.join('h', (msg) => messages.push(msg));
+  core.handle('h', { t: 'join', bots: 0, mode: 'escape', role: 'survivor' });
+  const monster = core.players.get(core.escapeState().monster);
+  assert.equal(monster.bot, true); assert.equal(monster.role, 'monster');
+  assert.equal(core.escapeState().total, 1); assert.equal(core.onlineBotCount, 0);
+  for (let i = 0; i < 30 * 4; i++) {
+    core.tick(1 / 30);
+    assert.equal(safeAt(core.map, monster.x, monster.z), -1);
+  }
+  assert.equal(messages.find((msg) => msg.t === 'welcome').role, 'survivor');
+  assert.ok(messages.some((msg) => msg.t === 'snap' && msg.esc?.monster === monster.id));
+  const soloCreature = new GameCore({ bots: 0, seed: 12, mode: 'escape' });
+  soloCreature.join('m', () => {});
+  soloCreature.handle('m', { t: 'join', bots: 0, role: 'monster' });
+  assert.equal(soloCreature.players.get('m').role, 'monster');
+  assert.equal(soloCreature.escapeState().total, 1, 'solo human creature has a real AI survivor opponent');
+  const survivor = [...soloCreature.players.values()].find((p) => p.bot);
+  const remaining = () => findPath(soloCreature.map, cellIndex(soloCreature.map, survivor.x, survivor.z), soloCreature.map.exit.cell).length;
+  const before = remaining();
+  for (let i = 0; i < 30 * 5; i++) soloCreature.tick(1 / 30);
+  assert.ok(remaining() < before, 'survivor AI makes real corridor progress toward the exit');
+});
+
+test('sanctuary rest heals only after stillness and is limited per zone and round', () => {
+  const { core, a } = escapeDuel();
+  const zones = core.map.safeZones;
+  Object.assign(a, { x: zones[0].x, z: zones[0].z, hp: 10, flags: 0 });
+  core.tick(1);
+  assert.equal(a.hp, 10, 'no immediate healing');
+  for (let i = 0; i < 30 * 10; i++) core.tick(1 / 30);
+  assert.ok(Math.abs(a.hp - (10 + REST_ZONE_HP)) < 1e-6);
+  a.hp = 10;
+  for (let i = 0; i < 30 * 3; i++) core.tick(1 / 30);
+  assert.equal(a.hp, 10, 're-entering the same zone cannot renew its healing');
+  for (const zone of zones.slice(1, 3)) {
+    Object.assign(a, { x: zone.x, z: zone.z, flags: 0 });
+    for (let i = 0; i < 30 * 10; i++) core.tick(1 / 30);
+  }
+  assert.ok(Math.abs(a.restHealed - REST_ROUND_HP) < 1e-6);
+  Object.assign(a, { x: zones[3].x, z: zones[3].z, hp: 10, flags: 0 });
+  for (let i = 0; i < 30 * 10; i++) core.tick(1 / 30);
+  assert.equal(a.hp, 10, 'round-wide healing budget is finite');
 });

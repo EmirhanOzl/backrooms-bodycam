@@ -1,6 +1,6 @@
 // BACKROOMS: BODYCAM — client
 import * as THREE from 'three';
-import { generateMap, CEIL, CRATE_H, VENDOR_H, raycast, rayInfo, lineOfSight, collide, hitNormal, findPath, cellCenter } from './shared/map.js';
+import { generateMap, CELL, CEIL, CRATE_H, VENDOR_H, raycast, rayInfo, lineOfSight, collide, hitNormal, findPath, cellCenter, safeAt } from './shared/map.js';
 import { WEAPONS, WEAPON_ORDER, GRENADE, MAX_NADES, dmgAt, zoneMul } from './shared/weapons.js';
 import { PLAYER_R, EYE_STAND, EYE_CROUCH, HEAD_STAND, HEAD_CROUCH, HEAD_R, BODY_R, MAX_HP, MAX_ARMOR, F, RESPAWN_T, PROTECT_T } from './shared/core.js';
 import { ATT, ATTACHMENTS, SHOP, VENDOR_R, magSize, reloadMul, fitsAtt, itemLabel, SUP_DMG, LASER_SPREAD } from './shared/items.js';
@@ -18,6 +18,21 @@ import { Pad, BTN } from './gamepad.js';
 import { shopIcons } from './icons.js';
 import { settings, saveSettings, buildSettingsPanel, buildControls, keyLabel, ALT_KEYS } from './settings.js';
 import { recordKill, recordDeath, recordMatch, addTime, saveCareer, careerHtml, resetCareer, randomTip } from './career.js';
+import { createMovementState, stepMovement, STAMINA_MAX } from './shared/movement.js';
+import { buildCustomizer } from './customize.js';
+
+function shadowFlashlight(light, size) {
+  light.castShadow = true;
+  light.shadow.mapSize.set(size, size);
+  light.shadow.camera.near = 0.06;
+  light.shadow.camera.far = light.distance;
+  light.shadow.autoUpdate = false;
+  // Fixed light pools must allocate a valid shadow texture before any shaded surface samples it.
+  light.shadow.needsUpdate = true;
+  light.target.position.copy(light.position); light.target.position.z -= 1;
+  light.shadow.bias = -0.00015;
+  light.shadow.normalBias = 0.025;
+}
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -69,11 +84,15 @@ class Game {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.setPixelRatio(1);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x2a2410);
     this.camera = new THREE.PerspectiveCamera(settings.fov, 16 / 9, 0.04, 70);
     this.camera.rotation.order = 'YXZ';
     this.scene.add(this.camera);
+    this.creatureVision = new THREE.HemisphereLight(0x8cb3b0, 0x262433, 0);
+    this.scene.add(this.creatureVision);
     this.vmScene = new THREE.Scene();
     this.vmCamera = new THREE.PerspectiveCamera(70, 16 / 9, 0.01, 5);
     this.vmAmb = new THREE.AmbientLight(0xfff0d8, 1);
@@ -83,11 +102,12 @@ class Game {
     this.vmScene.add(this.vmAmb, this.vmDir, this.vmFlash);
 
     this.flashlight = new THREE.SpotLight(0xfff1dc, 0, 34, 0.46, 0.6, 1.3);
+    shadowFlashlight(this.flashlight, 1024);
     this.muzzleLight = new THREE.PointLight(0xffa850, 0, 14, 1.6);
     this.remoteLights = [0, 1].map(() => new THREE.PointLight(0xffa850, 0, 12, 1.6));
     this.boomLight = new THREE.PointLight(0xffa050, 0, 20, 1.4);
     // fixed pool of real spot lights for the two nearest remote flashlights (a fixed light count never recompiles shaders)
-    this.remoteFlash = [0, 1].map(() => { const l = new THREE.SpotLight(0xfff1dc, 0, 26, 0.42, 0.6, 1.4); this.scene.add(l, l.target); return l; });
+    this.remoteFlash = [0, 1].map(() => { const l = new THREE.SpotLight(0xfff1dc, 0, 26, 0.42, 0.6, 1.4); shadowFlashlight(l, 512); this.scene.add(l, l.target); return l; });
     this.scene.add(this.flashlight, this.flashlight.target, this.muzzleLight, this.boomLight, ...this.remoteLights);
 
     this.particles = new Particles(this.scene, 700);
@@ -146,7 +166,9 @@ class Game {
       bloom: 0, kickP: 0, kickY: 0, swayP: 0, swayYw: 0, trauma: 0, bob: 0, stepAcc: 0, roll: 0,
       swayX: 0, swayY: 0, deathT: 0, deathAt: 0, deathYaw: 0, killerPos: null, hurt: 0, beatT: 0, breathT: 0,
       lean: 0, leanOff: 0, shotIdx: 0, lastShotT: -9, land: 0, inertX: 0, inertZ: 0, block: 0,
-      stamina: 1, exhausted: false, stamRegen: 0, breath: 1, holdBreath: false, fovPunch: 0,
+      stamina: STAMINA_MAX, exhausted: false, breath: 1, holdBreath: false, fovPunch: 0,
+      motion: createMovementState(), role: 'survivor', escaped: false, spectator: false,
+      motionInput: { forward: 0, side: 0, yaw: 0, sprint: false, crouch: false, ads: 0, moveMul: 1, jump: false },
       nadeHeld: false, cookT: 0, cooking: false, protectUntil: 0, cash: 0,
     };
   }
@@ -197,9 +219,12 @@ class Game {
     this.hud.endScreen(null);
     this.vm.root.visible = false;
     this.flashlight.intensity = 0;
+    this.flashlight.shadow.needsUpdate = !this.flashlight.shadow.map;
+    this.creatureVision.intensity = 0;
     this.buildAttract();
     if (document.pointerLockElement) document.exitPointerLock();
     this.sound.setHum?.(0.7);
+    refreshOnlineStatus();
   }
 
   // slow bodycam drift through the empty level behind the menu
@@ -246,7 +271,7 @@ class Game {
     let net;
     try {
       net = mode === 'online' ? await Net.online(4000)
-        : Net.offline({ bots: settings.bots + 1, difficulty: settings.diff, fragLimit: settings.frags, timeLimit: settings.time * 60, mode: settings.mode, light: settings.light }, !location.search.includes('noworker'));
+        : Net.offline({ bots: settings.bots + 1, difficulty: settings.diff, fragLimit: settings.frags, timeLimit: settings.time * 60, mode: settings.mode, light: settings.light, layout: settings.layout }, !location.search.includes('noworker'));
     } catch {
       this.loadProgress('Sunucuya bağlanılamadı.', 0);
       setTimeout(() => this.loading(false), 1600);
@@ -254,16 +279,23 @@ class Game {
       return;
     }
     this.net = net;
-    net.send({ t: 'join', name: settings.name });
-    let welcome = null;
+    net.send({ t: 'join', name: settings.name, appearance: settings.appearance, role: settings.escapeRole,
+      ...(mode === 'online' ? { bots: settings.onlineBots, mode: settings.onlineMode, layout: settings.onlineLayout, light: settings.onlineLight } : {}) });
+    let welcome = null, joinError = null;
     const pending = [];
-    for (let i = 0; i < 300 && !welcome && !net.closed; i++) {
+    for (let i = 0; i < 300 && !welcome && !joinError && !net.closed; i++) {
       await new Promise((r) => setTimeout(r, 20));
-      for (const m of net.poll()) { if (m.t === 'welcome') welcome = m; else if (welcome || m.t !== 'snap') pending.push(m); }
+      for (const m of net.poll()) {
+        if (m.t === 'welcome') welcome = m;
+        else if (m.t === 'error') joinError = m.message;
+        else if (welcome || m.t !== 'snap') pending.push(m);
+      }
     }
-    if (!welcome) { this.loadProgress('Sunucu yanıt vermedi.', 0); net.close(); setTimeout(() => this.loading(false), 1600); this.starting = false; return; }
+    if (!welcome) { this.loadProgress(joinError || 'Sunucu yanıt vermedi.', 0); net.close(); setTimeout(() => this.loading(false), 2400); this.starting = false; return; }
     this.myId = welcome.id;
     this.mode = welcome.mode || 'ffa';
+    this.layout = welcome.layout || 'maze';
+    this.escapeState = welcome.esc || null;
     this.myTeam = welcome.team ?? -1;
     this.teamScore = welcome.teamScore || [0, 0];
     this.fragLimit = welcome.fragLimit;
@@ -272,7 +304,7 @@ class Game {
     this.srv = null; this.lastSnapT = null;
     this.loadProgress('Seviye 0\'a noclip yapılıyor…', 0.45);
     await nextFrame();
-    this.loadLevel(welcome.seed, welcome.size, welcome.light);
+    this.loadLevel(welcome.seed, welcome.size, welcome.light, this.layout);
     welcome.crates.forEach((o, i) => this.world.setCrateOpen(i, !!o, true));
     for (const d of welcome.drops) this.addDrop(d);
     this.me = this.newMe();
@@ -323,13 +355,15 @@ class Game {
 
   quitToMenu() {
     saveCareer();
+    if (this.net?.online) this.net.ws.addEventListener('close', () => refreshOnlineStatus(), { once: true });
     if (this.net) this.net.close();
     this.net = null;
-    for (const r of this.remotes.values()) this.scene.remove(r.model.root);
+    for (const r of this.remotes.values()) { this.scene.remove(r.model.root); r.model.dispose(); }
     this.remotes.clear(); this.names.clear(); this.events.length = 0;
     this.clearCorpses();
     for (const L of this.remoteFlash) L.intensity = 0;
     this.clearDrops(); this.clearNades(); this.closeShop(false);
+    this.closeMap(false);
     this.me = this.newMe();
     this.particles.clear(); this.fire.clear(); this.tracers.clear();
     $('score').classList.add('hidden');
@@ -337,7 +371,7 @@ class Game {
   }
 
   // (Re)build the level for a seed; used at boot, at join and at every new match.
-  loadLevel(seed, size, light = 'normal') {
+  loadLevel(seed, size, light = 'normal', layout = 'maze') {
     if (this.world) {
       this.scene.remove(this.world.group);
       this.world.group.traverse((o) => {
@@ -349,7 +383,9 @@ class Game {
         }
       });
     }
-    this.map = generateMap(seed, size, light);
+    this.map = generateMap(seed, size, light, layout);
+    this.layout = this.map.layout;
+    this.sound.setEnvironment({ layout: this.layout });
     const t0 = performance.now();
     this.world = buildWorld(this.map, this.scene, this.renderer);
     console.log('world build ms', Math.round(performance.now() - t0));
@@ -357,6 +393,8 @@ class Game {
     this.hud.clock(this.serial);
     this.decals.clear(); this.blood.clear(); this.scorch.clear();
     this.clearDrops(); this.clearNades(); this.closeShop(false); this.clearCorpses();
+    this.closeMap(false);
+    this.safeZone = -1;
     this.nearCrate = -1; this.nearDrop = null; this.nearVendor = null;
     for (const r of this.remotes.values()) { r.buf.length = 0; }
   }
@@ -364,7 +402,7 @@ class Game {
   applyQuality() {
     const q = QUALITY[settings.quality] || QUALITY[1];
     this.scale = q.scale;
-    if (this.post) { this.post.rtScene.dispose(); this.post.rtA.dispose(); this.post.rtB.dispose(); }
+    this.post?.dispose();
     this.post = new BodycamPost(this.renderer, q.msaa);
     this.motes.points.visible = q.motes > 0;
     this.motes.points.geometry.setDrawRange(0, q.motes);
@@ -429,6 +467,7 @@ class Game {
     window.addEventListener('pagehide', () => saveCareer());
     this.canvas.addEventListener('click', () => this.lock());
     $('btnResume').onclick = () => { if (this.pad.active) { this.padPaused = false; this.refreshPause(); } else this.lock(); };
+    $('btnMapClose').onclick = () => this.closeMap();
     $('btnQuit').onclick = () => { this.sound.ui('ui_click', 0.5); this.quitToMenu(); };
     $('btnPauseSettings').onclick = () => { $('settingsPause').appendChild($('settingsBox')); $('pauseMain').classList.add('hidden'); $('pauseSettings').classList.remove('hidden'); };
     $('btnPauseBack').onclick = () => this.showPauseMain();
@@ -464,6 +503,10 @@ class Game {
       const act = this.actionOf(e.code);
       if (act === 'score' || e.code === 'Tab') e.preventDefault();
       if (act === 'score') { this.scoreOpen = true; this.renderScore(); return; }
+      if (this.mapOpen) {
+        if (!e.repeat && (e.code === 'Escape' || act === 'use')) { e.preventDefault(); this.closeMap(e.code !== 'Escape'); }
+        return;
+      }
       if (this.shop) { if (!e.repeat && this.shopKey(e.code, act)) e.preventDefault(); return; }
       if (!this.locked && this.clickToResume && e.code === 'Escape') { this.clickToResume = false; this.refreshPause(true); return; }
       if (!this.locked) return;
@@ -475,7 +518,7 @@ class Game {
       if (!me.alive) return;
       if (act === 'reload') this.startReload();
       else if (act === 'use') this.interact();
-      else if (act === 'flash') { me.flash = !me.flash; this.sound.ui('ui_click', 0.35); }
+      else if (act === 'flash' && me.role !== 'monster') { me.flash = !me.flash; this.sound.ui('ui_click', 0.35); }
       else if (act === 'mode') this.cycleMode();
       else if (act === 'inspect') this.inspect();
       else if (act === 'nade') this.nadePress();
@@ -483,6 +526,11 @@ class Game {
     });
     document.addEventListener('keyup', (e) => {
       this.keys[e.code] = false;
+      // Some browsers reserve Escape's keydown while releasing pointer lock.
+      if (e.code === 'Escape' && this.state === 'game') {
+        if (this.shop) this.closeShopToGame();
+        else if (this.mapOpen) this.closeMap(false);
+      }
       const act = this.actionOf(e.code);
       if (act === 'score') { this.scoreOpen = false; this.hud.scoreboard(false); }
       if (act === 'nade') this.me.nadeHeld = false;
@@ -496,12 +544,12 @@ class Game {
   }
   down(a) { if (this.keys[settings.binds[a]]) return true; const alt = ALT_KEYS[a]; return !!alt && alt.some((c) => this.keys[c]); }
   // paused = no mouse lock and no gamepad in use, or paused from the gamepad's Menu button
-  isPaused() { return this.state === 'game' && (this.padPaused || (!this.locked && !this.pad.active && !this.shop && !this.clickToResume)); }
+  isPaused() { return this.state === 'game' && !this.endData && (this.padPaused || (!this.locked && !this.pad.active && !this.shop && !this.mapOpen && !this.clickToResume)); }
   refreshPause(reset) {
     const paused = this.isPaused();
     const el = $('pause'), was = !el.classList.contains('hidden');
     el.classList.toggle('hidden', !paused);
-    $('resume').classList.toggle('hidden', !(this.clickToResume && !this.locked && this.state === 'game'));
+    $('resume').classList.toggle('hidden', !(this.clickToResume && !this.locked && this.state === 'game' && !this.endData));
     if (paused && (!was || reset)) this.showPauseMain();
     if (paused) this.closeShop();
     this.net?.setPaused(paused);
@@ -513,7 +561,11 @@ class Game {
     const P = this.pad, was = P.active;
     if (!P.poll()) { this.padMove = null; this.padFire = this.padAim = false; return; }
     const me = this.me;
-    if (P.pressed(BTN.MENU)) { if (this.isPaused()) { this.padPaused = false; P.active = true; } else this.padPaused = true; }
+    if (P.pressed(BTN.MENU)) {
+      if (this.shop) { this.closeShop(); this.padMove = null; this.padFire = this.padAim = false; return; }
+      if (this.mapOpen) { this.closeMap(); this.padMove = null; this.padFire = this.padAim = false; return; }
+      if (this.isPaused()) { this.padPaused = false; P.active = true; } else this.padPaused = true;
+    }
     if (!was || P.pressed(BTN.MENU)) this.refreshPause();
     if (P.pressed(BTN.VIEW)) { this.scoreOpen = true; this.renderScore(); }
     if (P.released(BTN.VIEW)) { this.scoreOpen = false; this.hud.scoreboard(false); }
@@ -538,6 +590,7 @@ class Game {
     this.padLean = (P.down[BTN.RIGHT] ? 1 : 0) - (P.down[BTN.LEFT] ? 1 : 0);
     if (!me.alive) return;
     if (this.shop) {
+      this.padMove = null; this.padFire = this.padAim = false;
       this.padJump = false;
       if (P.pressed(BTN.UP)) this.shopMove(-1);
       if (P.pressed(BTN.DOWN)) this.shopMove(1);
@@ -545,13 +598,18 @@ class Game {
       if (P.pressed(BTN.B) || P.pressed(BTN.X)) this.closeShop();
       return;
     }
-    if (P.pressed(BTN.X)) { if (this.nearDrop || this.nearCrate >= 0 || this.nearVendor) this.interact(); else this.startReload(); }
+    if (this.mapOpen) {
+      this.padMove = null; this.padFire = this.padAim = false; this.padJump = false;
+      if (P.pressed(BTN.B) || P.pressed(BTN.X)) this.closeMap();
+      return;
+    }
+    if (P.pressed(BTN.X)) { if (this.nearDrop || this.nearCrate >= 0 || this.nearVendor || this.safeZone >= 0) this.interact(); else this.startReload(); }
     if (P.pressed(BTN.Y)) this.equip(me.slot === 'primary' || !me.inv.primary ? 'secondary' : 'primary');
     if (P.pressed(BTN.LB)) this.equip(me.slot === 'melee' ? (me.inv.primary ? 'primary' : 'secondary') : 'melee');
     if (P.pressed(BTN.RB)) this.nadePress();
     if (P.released(BTN.RB)) me.nadeHeld = false;
     if (P.pressed(BTN.R3)) this.inspect();
-    if (P.pressed(BTN.UP)) { me.flash = !me.flash; this.sound.ui('ui_click', 0.35); }
+    if (P.pressed(BTN.UP) && me.role !== 'monster') { me.flash = !me.flash; this.sound.ui('ui_click', 0.35); }
     if (P.pressed(BTN.DOWN)) this.cycleMode();
   }
 
@@ -564,6 +622,7 @@ class Game {
     const me = this.me;
     me.slot = slot; me.pendingSlot = null;
     me.reloading = false; me.cycling = false; me.burst = 0; me.slideBack = false;
+    this.scopeK = 0; me.ads = 0;
     const type = this.curType();
     this.vm.setAttachments(type, this.cur().a);
     this.vm.setWeapon(type);
@@ -573,6 +632,7 @@ class Game {
   equip(slot) {
     const me = this.me;
     if (!me.alive || !slot || !me.inv[slot]) return;
+    if (me.role === 'monster' && slot !== 'melee') return;
     if (slot === (me.pendingSlot || me.slot)) return;
     const an = this.vm.animName;
     if (an && an.startsWith('nade')) return;
@@ -614,6 +674,7 @@ class Game {
   nadePress() {
     const me = this.me;
     me.nadeHeld = true;
+    if (me.role === 'monster') return;
     if (me.inv.nades <= 0 || !me.alive) { if (me.inv.nades <= 0) this.hud.toast('EL BOMBASI YOK', 'bad'); return; }
     const an = this.vm.animName;
     if (an && !isInspect(an) && an !== 'reload' && an !== 'sg_start' && an !== 'sg_insert' && an !== 'revolver') return;
@@ -638,6 +699,9 @@ class Game {
   interact() {
     const me = this.me;
     if (!me.alive) return;
+    if (this.mapOpen) { this.closeMap(); return; }
+    if (me.role === 'monster') return;
+    if (this.mode === 'escape' && this.safeZone >= 0 && !this.nearDrop && !this.nearVendor && this.nearCrate < 0) { this.openMap(); return; }
     if (this.shop) { this.closeShop(); return; }
     if (this.time - (this.lastUse || 0) < 0.3) return;
     this.lastUse = this.time;
@@ -688,7 +752,79 @@ class Game {
     if (!this.shop) return;
     this.clickToResume = !this.pad.active && this.state === 'game';
     this.closeShop(false);
-    if (this.clickToResume) this.lock(() => this.refreshPause());
+  }
+
+  openMap() {
+    if (this.mode !== 'escape' || !this.me.alive || this.me.role === 'monster' || safeAt(this.map, this.me.pos.x, this.me.pos.z) < 0) return;
+    this.mapOpen = true;
+    this.mouse.l = this.mouse.r = false; this.keys = {};
+    this.me.adsToggle = false; this.me.nadeHeld = false;
+    this.me.vel.set(0, 0, 0);
+    $('mapOverlay').classList.remove('hidden');
+    this.drawEscapeMap();
+    if (this.locked) { this.shopUnlock = true; document.exitPointerLock(); }
+    this.sound.ui('ui_click', 0.35);
+  }
+
+  closeMap(relock = true) {
+    if (!this.mapOpen) return;
+    this.clickToResume = !this.pad.active && this.state === 'game';
+    this.mapOpen = false;
+    $('mapOverlay').classList.add('hidden');
+    this.sound.ui('ui_click', 0.3);
+    this.refreshPause();
+    if (relock && this.clickToResume) this.lock();
+  }
+
+  drawEscapeMap() {
+    const map = this.map, canvas = $('escapeMap'), ctx = canvas.getContext('2d');
+    const pad = 40, scale = (canvas.width - pad * 2) / map.W;
+    ctx.fillStyle = '#142222'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    for (let z = 0; z < map.H; z++) for (let x = 0; x < map.W; x++) {
+      if (map.safeMask[z * map.W + x] < 0) continue;
+      ctx.fillStyle = '#365d37'; ctx.fillRect(pad + x * scale, pad + z * scale, scale, scale);
+    }
+    ctx.strokeStyle = '#a8b7a6'; ctx.lineWidth = 1.5;
+    const edge = (ax, az, bx, bz, type) => {
+      if (!type) return;
+      const x0 = pad + ax * scale, z0 = pad + az * scale, x1 = pad + bx * scale, z1 = pad + bz * scale;
+      ctx.beginPath(); ctx.moveTo(x0, z0);
+      if (type === 2) {
+        ctx.lineTo(x0 + (x1 - x0) * 0.33, z0 + (z1 - z0) * 0.33);
+        ctx.moveTo(x0 + (x1 - x0) * 0.67, z0 + (z1 - z0) * 0.67);
+      }
+      ctx.lineTo(x1, z1); ctx.stroke();
+    };
+    for (let z = 0; z <= map.H; z++) for (let x = 0; x < map.W; x++) edge(x, z, x + 1, z, map.h[z * map.W + x]);
+    for (let z = 0; z < map.H; z++) for (let x = 0; x <= map.W; x++) edge(x, z, x, z + 1, map.v[z * (map.W + 1) + x]);
+    const dot = (p, color, text, radius) => {
+      const x = pad + p.x / CELL * scale, z = pad + p.z / CELL * scale;
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, z, radius, 0, Math.PI * 2); ctx.fill();
+      ctx.font = 'bold 12px Consolas, monospace'; ctx.fillText(text, x + 8, z - 6);
+    };
+    for (const s of map.safeZones) dot(s, '#bce69a', String(s.id + 1), 4);
+    dot(map.exit, '#ffd378', 'ÇIKIŞ', 7);
+    dot({ x: this.me.pos.x, z: this.me.pos.z }, '#75def5', 'SİZ', 6);
+    ctx.fillStyle = '#97afa7'; ctx.font = '14px Consolas, monospace';
+    ctx.fillText('KUZEY ↑', pad, 24);
+    ctx.fillText(`${map.W * CELL} × ${map.H * CELL} m · PLAN ${this.serial}`, pad, canvas.height - 14);
+    const zone = map.safeZones[safeAt(map, this.me.pos.x, this.me.pos.z)];
+    $('mapLocation').textContent = `${zone?.label || 'Işıklı sığınak'} · rotayı hafızanda tut`;
+  }
+
+  updateEscapeHud() {
+    const el = $('escapeObjective'), state = this.escapeState;
+    el.classList.toggle('hidden', this.mode !== 'escape');
+    if (this.mode !== 'escape') return;
+    const me = this.me, monster = me.role === 'monster', safe = this.safeZone >= 0;
+    el.classList.toggle('monster', monster); el.classList.toggle('safe', safe && !monster);
+    const title = monster ? 'YARATIK / KARANLIK AVCISI' : me.escaped ? 'TAHLİYE TAMAMLANDI' : safe ? 'IŞIKLI SIĞINAK / GÜVENDESİN' : 'DERİN LABİRENT / ÇIKIŞI BUL';
+    const instruction = monster ? 'Işıklı odalara giremezsin. Sol tık: pençe · sağ tık: ağır saldırı.'
+      : me.spectator || !me.alive ? 'Sonraki turu bekliyorsun. Hayattaki gezginler çıkışa ilerliyor.'
+      : safe ? `[${keyLabel(settings.binds.use)}] Haritayı incele · dinlen ve güzergâhını ezberle`
+      : 'Güvenli ışıkları ara. Harita yalnızca sığınaklarda açılır.';
+    const html = `<strong>${title}</strong>${esc(instruction)}<br>ÇIKIŞA ULAŞAN ${state?.escaped ?? 0} / ${state?.total ?? 0}`;
+    if (this.escapeHudHtml !== html) { el.innerHTML = html; this.escapeHudHtml = html; }
   }
   shopMove(dir) {
     if (!this.shop) return;
@@ -828,21 +964,27 @@ class Game {
         for (const p of m.list) {
           ids.add(p.id);
           this.names.set(p.id, p);
-          if (p.id === this.myId) { this.myTeam = p.team ?? -1; continue; }
-          if (this.remotes.has(p.id)) continue;
-          const model = new Soldier(p.color, 'pistol');
+          if (p.id === this.myId) {
+            this.myTeam = p.team ?? -1; me.role = p.role || 'survivor'; me.spectator = !!p.spectator;
+            continue;
+          }
+          const existing = this.remotes.get(p.id);
+          if (existing) { existing.model.setAppearance(p.appearance); existing.model.setRole(p.role); continue; }
+          const model = new Soldier(p.color, 'pistol', p.appearance);
+          model.setRole(p.role);
           model.root.visible = false;
           this.scene.add(model.root);
           this.remotes.set(p.id, { id: p.id, model, buf: [], x: 0, y: 0, z: 0, yaw: 0, pitch: 0, speed: 0, stepAcc: 0, flags: 0, w: 0, alive: false, kills: 0, deaths: 0, hs: 0, hp: 100, ar: 0, lean: 0 });
         }
         for (const r of this.remotes.values()) r.model.setFriendly(this.isFriend(r.id));
-        for (const [id, r] of this.remotes) if (!ids.has(id)) { this.scene.remove(r.model.root); this.remotes.delete(id); }
+        for (const [id, r] of this.remotes) if (!ids.has(id)) { this.scene.remove(r.model.root); r.model.dispose(); this.remotes.delete(id); }
         return;
       }
       case 'snap': {
         if (this.lastSnapT == null || m.st >= this.lastSnapT) { this.lastSnapT = m.st; this.lastSnapAt = performance.now() / 1000; }
         this.tl = m.tl; this.tlAt = this.time;
         if (m.ts) this.teamScore = m.ts;
+        if (m.esc) this.escapeState = m.esc;
         for (const s of m.ps) {
           const [id, x, y, z, yaw, pitch, f, w, hp, ar, k, d, hs, att] = s;
           if (id === this.myId) {
@@ -861,15 +1003,19 @@ class Game {
       }
       case 'spawn':
         me.pos.set(m.x, 0, m.z); me.vel.set(0, 0, 0); me.vy = 0;
-        me.yaw = m.yaw; me.pitch = 0; me.alive = true; me.hp = MAX_HP; me.armor = 0; me.deathT = 0; me.hurt = 0;
-        me.kickP = me.kickY = 0; me.stamina = 1; me.exhausted = false; me.breath = 1; me.ads = 0; me.adsToggle = false; me.streak = 0;
+        me.yaw = m.yaw; me.pitch = 0; me.role = m.role || 'survivor'; me.spectator = !!m.spectator; me.escaped = !!m.escaped;
+        me.alive = !me.spectator && !m.eliminated && !me.escaped; me.hp = m.hp ?? MAX_HP; me.armor = m.armor ?? 0; me.deathT = 0; me.hurt = 0;
+        me.kickP = me.kickY = 0; me.stamina = STAMINA_MAX; me.exhausted = false; me.breath = 1; me.ads = 0; me.adsToggle = false; me.streak = 0;
+        me.motion = createMovementState({ x: m.x, z: m.z }); me.onGround = true; me.flash = false;
         me.protectUntil = this.time + PROTECT_T; me.nadeHeld = false; me.cooking = false;
         if (m.cash != null) { me.cash = m.cash; this.hud.cash(me.cash); }
         this.closeShop(false); me.dp = null;
-        me.inv = { primary: m.inv?.p ? mkSlot(m.inv.p) : null, secondary: mkSlot(m.inv?.s || 'pistol'), melee: mkSlot('knife'), nades: m.inv?.n ?? 1 };
+        this.closeMap(false);
+        me.inv = { primary: m.inv?.p ? mkSlot(m.inv.p) : null, secondary: me.role === 'monster' ? null : mkSlot(m.inv?.s || 'pistol'), melee: mkSlot('knife'), nades: m.inv?.n ?? 1 };
         this.vm.stop();
-        this.setWeapon(me.inv.primary ? 'primary' : 'secondary');
-        this.hud.death(false);
+        this.vm.setAppearance(m.appearance || settings.appearance); this.vm.setRole(me.role);
+        this.setWeapon(me.role === 'monster' ? 'melee' : me.inv.primary ? 'primary' : 'secondary');
+        this.hud.death(!me.alive, 'Bir sonraki turda katılacaksın.', 'Maç devam ediyor.', 'spectator');
         this.sound.ui('ui_beep', 0.4);
         return;
       case 'shot': this.schedule(m.ts, (when) => this.remoteShot(m, when)); return;
@@ -897,6 +1043,7 @@ class Game {
       case 'hit': {
         const pred = this.predHits.get(m.id);
         const predicted = pred != null && this.time - pred < 0.6;
+        if (settings.hitmarks) this.hud.hitDamage(m.dmg, m.kill);
         if (m.kill) {
           const h = m.zone === 'h';
           if (settings.hitmarks) this.hud.hitmarker(h ? 'killh' : 'kill');
@@ -972,19 +1119,42 @@ class Game {
       case 'undrop': this.removeDrop(m.id); return;
       case 'match':
         this.endData = m; this.endAt = this.time;
-        this.hud.endScreen(m, this.myId, this.myTeam);
-        recordMatch(m.mode === 'tdm' ? m.winnerTeam === this.myTeam : m.winner === this.myId, m.table.find((r) => r.id === this.myId));
+        this.closeMap(false); this.closeShop(false);
+        this.hud.endScreen(m, this.myId, this.myTeam, me.role);
+        this.refreshPause();
+        const won = m.mode === 'escape' ? (m.outcome === 'escaped') !== (me.role === 'monster') : m.mode === 'tdm' ? m.winnerTeam === this.myTeam : m.winner === this.myId;
+        recordMatch(won, m.table.find((r) => r.id === this.myId));
         this.sound.ui('ui_end', 0.6);
         me.ads = 0;
         return;
       case 'reset':
         this.endData = null;
         this.hud.endScreen(null);
+        this.refreshPause(true);
         this.hud.banner('');
         this.fragLimit = m.fragLimit ?? this.fragLimit; this.timeLimit = m.timeLimit ?? this.timeLimit;
-        this.loadLevel(m.seed, m.size, m.light);
+        this.mode = m.mode || this.mode; this.escapeState = m.esc || null;
+        this.loadLevel(m.seed, m.size, m.light, m.layout || this.layout);
         this.warmup();
         this.hud.toast('YENİ SEVİYE');
+        return;
+      case 'correct':
+        me.pos.set(...m.p); me.vel.set(0, 0, 0); me.vy = 0; me.onGround = m.p[1] === 0;
+        me.motion = createMovementState({ x: m.p[0], y: m.p[1], z: m.p[2], stamina: me.stamina, exhausted: me.exhausted, crouch: me.crouch, onGround: me.onGround });
+        return;
+      case 'escape':
+        if (m.esc) this.escapeState = m.esc;
+        if (m.id === this.myId && m.action === 'escaped') {
+          me.escaped = true; me.spectator = true; me.alive = false; me.ads = 0; me.vel.set(0, 0, 0);
+          this.closeMap(false); this.closeShop(false);
+          this.hud.death(true, 'Çıkışa ulaştın.', 'Takımının kalanını izleyebilirsin.', 'escaped');
+          this.sound.ui('ui_end', 0.45);
+        }
+        if (m.action === 'role') {
+          const name = this.names.get(m.id);
+          if (name) name.role = m.role || (m.esc?.monster === m.id ? 'monster' : 'survivor');
+          this.remotes.get(m.id)?.model.setRole(name?.role || 'survivor');
+        }
         return;
       case 'pong': this.ping = Math.round(performance.now() - m.c); return;
     }
@@ -1025,7 +1195,11 @@ class Game {
     this.post.final.uniforms.uFlash.value = Math.max(this.post.final.uniforms.uFlash.value, head ? 0.25 : 0);
   }
 
-  isFriend(id) { return this.mode === 'tdm' && id !== this.myId && this.names.get(id)?.team === this.myTeam; }
+  isFriend(id) {
+    if (id === this.myId) return false;
+    const p = this.names.get(id);
+    return this.mode === 'tdm' ? p?.team === this.myTeam : this.mode === 'escape' && this.me.role !== 'monster' && p?.role !== 'monster';
+  }
 
   onKill(m) {
     const me = this.me;
@@ -1064,7 +1238,8 @@ class Game {
   // The victim's model stays behind as a body thrown by the killing blow; the player gets a fresh model.
   spawnCorpse(r, m) {
     const old = r.model, n = this.names.get(r.id);
-    r.model = new Soldier(n?.color || '#333', 'pistol');
+    r.model = new Soldier(n?.color || '#333', 'pistol', n?.appearance);
+    r.model.setRole(n?.role);
     r.model.root.visible = false;
     r.model.setFriendly(this.isFriend(r.id));
     this.scene.add(r.model.root);
@@ -1105,7 +1280,7 @@ class Game {
       const ground = b.y <= h;
       if (ground) {
         if (b.vy < -2.2) {
-          if (Math.hypot(b.x - cp.x, b.z - cp.z) < 30) this.sound.play('st_land', { cat: 'imp', pos: this.v1.set(b.x, 0.2, b.z), vol: Math.min(0.9, -b.vy * 0.12), ref: 2, occl: this.occluded(this.v1) });
+          if (Math.hypot(b.x - cp.x, b.z - cp.z) < 30) this.sound.land(this.v1.set(b.x, 0.2, b.z), { vol: Math.min(0.9, -b.vy * 0.12), surface: this.layout === 'arena' ? 'concrete' : 'carpet', occl: this.occluded(this.v1) });
           b.w *= 0.4; // the impact kills most of the spin
         }
         b.y = h;
@@ -1121,9 +1296,9 @@ class Game {
         if (!b.landed) {
           b.landed = true;
           const q = this.v1.set(b.x, 0.2, b.z);
-          if (q.distanceTo(cp) < 30) this.sound.play('st_land', { cat: 'imp', pos: q, vol: 0.6, ref: 2, occl: this.occluded(q) });
+          if (q.distanceTo(cp) < 30) this.sound.land(q, { vol: 0.6, surface: this.layout === 'arena' ? 'concrete' : 'carpet', occl: this.occluded(q) });
           this.particles.dust(q, this.v2.set(0, 1, 0), clamp(this.world.sampleLight(b.x, b.z), 0.2, 1.1), 'floor');
-          this.blood.add(this.v3.set(b.x, 0.003, b.z), this.v2.set(0, 1, 0), 0.7 + Math.random() * 0.4);
+          this.blood.add(this.v3.set(b.x, 0.003, b.z), this.v2.set(0, 1, 0), 0.7 + Math.random() * 0.4, 1, { light: this.world.sampleLight(b.x, b.z) });
         }
       } else if (ground) {
         // topple over whichever end touches the carpet (feet or head), never balance on it
@@ -1135,12 +1310,12 @@ class Game {
       b.model.ragdoll(dt, b, this.world.sampleLight(b.x, b.z) * 0.95 + 0.03);
     }
     if (this.corpses.some((b) => b.dead)) {
-      for (const b of this.corpses) if (b.dead) { this.scene.remove(b.model.root); b.model.mat.dispose(); }
+      for (const b of this.corpses) if (b.dead) { this.scene.remove(b.model.root); b.model.dispose(); }
       this.corpses = this.corpses.filter((b) => !b.dead);
     }
   }
   clearCorpses() {
-    for (const b of this.corpses) { this.scene.remove(b.model.root); b.model.mat.dispose(); }
+    for (const b of this.corpses) { this.scene.remove(b.model.root); b.model.dispose(); }
     this.corpses = [];
   }
 
@@ -1152,6 +1327,7 @@ class Game {
     const geo = d.k === 'weapon' ? mergedGunGeometry(d.w, d.a | 0).geo : mergedItemGeometry(d.k, d.v);
     const mat = bakeMaterial({ vertexColors: true, color: 0xffffff, shininess: 30, specular: 0x333333 }, { uniform: true, phong: true });
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = mesh.receiveShadow = true;
     mesh.rotation.order = 'YXZ';
     const rest = ITEM_REST[d.k] || ITEM_REST.ammo;
     const e = { ...d, mesh, baseL: this.world.sampleLight(d.x, d.z) * 0.95 + 0.04, restY: d.k === 'weapon' ? (WEAPONS[d.w].slot === 'primary' ? 0.03 : 0.022) : rest[0], rest };
@@ -1209,6 +1385,7 @@ class Game {
   addNade(id, { o, v, fuse, by, elapsed }) {
     const g = makeNade(o, v);
     const mesh = new THREE.Mesh(this.nadeGeo, bakeMaterial({ vertexColors: true, color: 0xffffff, shininess: 20, specular: 0x222222 }, { uniform: true, phong: true }));
+    mesh.castShadow = mesh.receiveShadow = true;
     this.scene.add(mesh);
     const n = { id, g, fuse, by, acc: 0, mesh, spin: new THREE.Vector3(Math.random() * 10, Math.random() * 10, 0), dead: 0 };
     let steps = Math.min(Math.floor(elapsed / NADE_STEP), Math.floor(fuse / NADE_STEP));
@@ -1246,7 +1423,7 @@ class Game {
     this.fire.fireball(p);
     const light = clamp(this.world.sampleLight(p.x, p.z), 0.2, 1.2);
     this.particles.explosionSmoke(p, light);
-    this.scorch.add(this.v1.set(p.x, 0.003, p.z), this.v2.set(0, 1, 0), 1.7 + Math.random() * 0.5);
+    this.scorch.add(this.v1.set(p.x, 0.003, p.z), this.v2.set(0, 1, 0), 1.7 + Math.random() * 0.5, 1, { light: this.world.sampleLight(p.x, p.z) });
     this.boomLight.position.set(p.x, Math.max(0.5, p.y + 0.4), p.z);
     this.boomLight.intensity = 90;
     const k = clamp(1 - dist / 16, 0, 1) * (occl ? 0.4 : 1);
@@ -1258,21 +1435,28 @@ class Game {
 
   // ------------------------------------------------------------------ shooting
   // world + remote players + crates; skipRemotes for remote-shot visuals
-  trace(o, d, maxD, skipRemotes = false) {
-    const res = this.traceRes || (this.traceRes = { t: 0, kind: null, id: null, zone: null, n: new THREE.Vector3() });
-    res.t = maxD; res.kind = null; res.id = null; res.zone = null; res.n.set(0, 1, 0);
+  trace(o, d, maxD, skipRemotes = false, target = null) {
+    const res = target || this.traceRes || (this.traceRes = { t: 0, kind: null, id: null, zone: null, n: new THREE.Vector3() });
+    res.t = maxD; res.kind = null; res.id = null; res.zone = null; res.box = null; res.n.set(0, 1, 0);
     const hl = Math.hypot(d.x, d.z);
     if (hl > 1e-5) {
-      let t2 = raycast(this.map, o.x, o.z, d.x / hl, d.z / hl, maxD * hl), kind = 'wall';
-      const b = rayInfo.box >= 0 ? this.map.boxes[rayInfo.box] : null;
-      if (b && b.kind === 3) {
-        if (o.y + (d.y * t2) / hl > VENDOR_H) { b.off = true; t2 = raycast(this.map, o.x, o.z, d.x / hl, d.z / hl, maxD * hl); b.off = false; }
-        else kind = 'metal';
+      const skipped = this.skippedRayBoxes || (this.skippedRayBoxes = []);
+      let b = null, t2 = maxD * hl;
+      for (;;) {
+        t2 = raycast(this.map, o.x, o.z, d.x / hl, d.z / hl, maxD * hl);
+        b = rayInfo.box >= 0 ? this.map.boxes[rayInfo.box] : null;
+        if (!b || b.kind !== 3 || o.y + d.y * t2 / hl <= VENDOR_H) break;
+        b.off = true; skipped.push(b);
       }
-      if (t2 / hl < res.t) { res.t = t2 / hl; res.kind = kind; res.n.set(hitNormal[0], 0, hitNormal[1]); }
+      if (b && t2 / hl < res.t) {
+        res.t = t2 / hl; res.kind = b.kind === 3 ? 'metal' : 'wall'; res.box = b;
+        res.n.set(hitNormal[0], 0, hitNormal[1]);
+      }
+      for (const box of skipped) box.off = false;
+      skipped.length = 0;
     }
-    if (d.y < 0) { const t = -o.y / d.y; if (t < res.t) { res.t = t; res.kind = 'floor'; res.n.set(0, 1, 0); } }
-    if (d.y > 0) { const t = (CEIL - o.y) / d.y; if (t < res.t) { res.t = t; res.kind = 'ceil'; res.n.set(0, -1, 0); } }
+    if (d.y < 0) { const t = -o.y / d.y; if (t >= 0 && t < res.t) { res.t = t; res.kind = 'floor'; res.box = null; res.n.set(0, 1, 0); } }
+    if (d.y > 0) { const t = (CEIL - o.y) / d.y; if (t >= 0 && t < res.t) { res.t = t; res.kind = 'ceil'; res.box = null; res.n.set(0, -1, 0); } }
     // crates (axis-aligned approximation)
     const hl2 = d.x * d.x + d.z * d.z;
     if (hl2 > 1e-6) {
@@ -1314,18 +1498,34 @@ class Game {
       const head = res.zone === 'h';
       this.particles.blood(p, d, light, head);
       if (withSound) this.sound.impact(head ? 'head' : 'player', p, dist);
-      // spatter on whatever is behind the victim
-      const kind = res.kind, pp = this.v3.copy(p);
-      const r2 = this.trace(pp, d, 2.6, true);
-      if (r2.kind && r2.kind !== 'ceil') this.blood.add(this.v4.copy(pp).addScaledVector(d, r2.t), r2.n, (head ? 0.45 : 0.3) + Math.random() * 0.25);
-      res.kind = kind;
+      // A second trace owns its result: never mistake the original victim or an exhausted ray for a surface.
+      const pp = this.v3.copy(p);
+      const target = this.spatterRes || (this.spatterRes = { n: new THREE.Vector3() });
+      const surface = this.trace(pp, d, 2.6, true, target);
+      if (surface.kind === 'wall' || surface.kind === 'metal' || surface.kind === 'floor') {
+        this.surfaceBlood(surface, this.v4.copy(pp).addScaledVector(d, surface.t), (head ? 0.45 : 0.3) + Math.random() * 0.25);
+      }
       return;
     }
     if (!res.kind) return;
     if (withSound) this.sound.impact(res.kind === 'crate' ? 'wall' : res.kind === 'metal' ? 'plate' : res.kind, p, dist, this.occluded(p));
-    if (!silentDecal) this.decals.add(p, res.n, res.kind === 'floor' ? 0.07 : 0.085);
+    if (!silentDecal) this.decals.add(p, res.n, res.kind === 'floor' ? 0.07 : 0.085, 1, { light: this.world.sampleLight(p.x, p.z) });
     this.particles.dust(p, res.n, res.kind === 'wall' ? light * 1.2 : res.kind === 'ceil' ? light * 1.4 : light * 0.9, res.kind === 'metal' ? 'wall' : res.kind);
     if (res.kind !== 'floor' && Math.random() < (res.kind === 'metal' ? 0.7 : 0.15)) this.particles.sparks(p, res.n);
+  }
+
+  surfaceBlood(surface, p, size) {
+    const b = surface.box;
+    if (surface.kind === 'floor') {
+      this.blood.add(p, surface.n, size, 1, { light: this.world.sampleLight(p.x, p.z), bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: this.map.size, y: 0, z: this.map.size } } });
+      return;
+    }
+    if (!b || (surface.kind !== 'wall' && surface.kind !== 'metal')) return;
+    const height = b.kind === 3 ? VENDOR_H : CEIL;
+    const min = { x: b.x0, y: 0, z: b.z0 }, max = { x: b.x1, y: height, z: b.z1 };
+    if (Math.abs(surface.n.x) > 0.5) min.x = max.x = surface.n.x < 0 ? b.x0 : b.x1;
+    else min.z = max.z = surface.n.z < 0 ? b.z0 : b.z1;
+    this.blood.add(p, surface.n, size, 1, { light: this.world.sampleLight(p.x, p.z), bounds: { min, max } });
   }
 
   eyePos(out) {
@@ -1420,7 +1620,8 @@ class Game {
     const ads = w.scope ? smoothstep(0.75, 0.98, me.ads) : me.ads;
     const las = (s.a | 0) & ATT.LAS ? lerp(LASER_SPREAD, 1, ads) : 1;
     const moving = Math.min(1, Math.hypot(me.vel.x, me.vel.z) / 3.3);
-    return (lerp(w.spread, w.adsSpread, ads) * (me.crouch ? 0.8 : 1) + moving * w.moveSpread * (1 - ads * 0.5) * (las < 1 ? 0.7 : 1) + (me.onGround ? 0 : 0.06) + me.bloom * w.spread * 0.7) * las;
+    const bloom = me.bloom * lerp(w.spread * 0.5, w.adsSpread * 2, ads);
+    return (lerp(w.spread, w.adsSpread, ads) * (me.crouch ? 0.8 : 1) + moving * w.moveSpread * (1 - ads * 0.72) * (las < 1 ? 0.7 : 1) + (me.onGround ? 0 : w.scope ? 0.045 : 0.025) + bloom) * las;
   }
 
   knifeHit(heavy) {
@@ -1459,7 +1660,7 @@ class Game {
       this.sound.play('kn_wall', { cat: 'imp', pos: p, vol: 0.7, ref: 2 });
       this.particles.sparks(p, res.n, 7);
       this.particles.dust(p, res.n, clamp(this.world.sampleLight(p.x, p.z), 0.2, 1.2), res.kind);
-      this.decals.add(p, res.n, 0.05);
+      this.decals.add(p, res.n, 0.05, 1, { light: this.world.sampleLight(p.x, p.z) });
       this.vm.bump(-5, 0.6);
       me.trauma = Math.min(1, me.trauma + 0.1);
     }
@@ -1507,14 +1708,15 @@ class Game {
     const raw = (now - this.last) / 1000, dt = clamp(raw, 0, 0.05);
     this.last = now;
     if (raw > 0.12 && this.state === 'game') { (this.hitches ||= []).push({ t: +this.time.toFixed(1), ms: Math.round(raw * 1000) }); if (this.hitches.length > 30) this.hitches.shift(); }
-    this.time += dt;
+    this.time += this.state === 'game' && this.isPaused() && !this.net?.online ? 0 : dt;
     this.fpsN = (this.fpsN || 0) + 1;
     if (!this.fpsAt) this.fpsAt = now;
     if (now - this.fpsAt >= 500) { this.fps = Math.round((this.fpsN * 1000) / (now - this.fpsAt)); this.fpsAt = now; this.fpsN = 0; this.hud.fps(settings.fps, this.fps); }
     if (this.state === 'menu' || this.state === 'boot') {
       if (this.map) {
         this.updateAttract(dt);
-        this.world.update(dt, this.time);
+        this.world.update(dt, this.time, this.camera.position);
+        if (!$('p-customize').classList.contains('hidden')) this.customizer?.update(dt);
         this.updateAmbience(dt);
         this.motes.update(this.time, this.camera.position, this.v1.set(0, 0, -1).applyQuaternion(this.camera.quaternion), clamp(this.world.sampleLight(this.camera.position.x, this.camera.position.z), 0, 1.5), false);
         this.hudT = (this.hudT || 0) - dt;
@@ -1536,14 +1738,14 @@ class Game {
     this.updatePlayer(dt);
     this.updateWeapon(dt);
     this.updateCamera(dt);
-    this.updateViewmodel(dt);
+    this.updateViewmodel(this.isPaused() ? 0 : dt);
     this.updateRemotes(dt);
     this.updateRemoteFlashlights();
     this.updateNades(dt);
     this.updateDrops(dt);
     this.updateCorpses(dt);
     this.updateLasers();
-    this.world.update(dt, this.time);
+    this.world.update(dt, this.time, this.camera.position);
     this.particles.update(dt); this.fire.update(dt); this.tracers.update(dt); this.muzzles.update(dt); this.vmMuzzle.update(dt); this.shells.update(dt);
     this.boomLight.intensity = Math.max(0, this.boomLight.intensity - dt * 350);
     this.updateAmbience(dt);
@@ -1592,6 +1794,7 @@ class Game {
     u.uFlash.value = Math.max(0, u.uFlash.value - dt * 8);
     u.uLens.value = settings.lens;
     u.uExposure.value = settings.bright;
+    u.uCreature.value = this.state === 'game' && this.me.role === 'monster' ? 1 : 0;
     u.uScope.value = s.scope;
     u.uK.value = lerp(0.34, 0.2, s.ads);
     u.uZoom.value = lerp(1, lerp(0.79, 0.86, s.ads), settings.lens);
@@ -1609,6 +1812,7 @@ class Game {
 
   updatePlayer(dt) {
     const me = this.me;
+    if (this.isPaused()) return;
     me.hurt = Math.max(0, me.hurt - dt * 1.2);
     me.trauma = Math.max(0, me.trauma - dt * 1.8);
     if (!me.alive) { me.deathT = Math.min(1, me.deathT + dt * 1.6); me.vel.set(0, 0, 0); this.nearCrate = -1; this.nearDrop = null; this.nearVendor = null; return; }
@@ -1616,17 +1820,11 @@ class Game {
     const pm = this.padMove;
     const f = clamp((this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0) - (pm ? pm[1] : 0), -1, 1);
     const s = clamp((this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0) + (pm ? pm[0] : 0), -1, 1);
-    const stick = pm ? Math.min(1, Math.hypot(pm[0], pm[1])) : 0;
     if (me.padSprint && (!pm || pm[1] > -0.5)) me.padSprint = false; // stick sprint ends when you stop pushing forward
     me.crouch = (settings.holdCrouch ? this.down('crouch') : !!me.crouchToggle) || !!me.padCrouch;
     if (me.crouch && me.padSprint) me.padCrouch = false;
     const shift = this.down('sprint') || !!me.padSprint;
-    if (me.exhausted && me.stamina > 0.3) me.exhausted = false;
-    me.sprint = shift && f > 0 && !me.crouch && me.ads < 0.3 && me.onGround && !me.reloading && !me.exhausted && !(this.vm.animName || '').startsWith('knife');
-    if (me.sprint) {
-      me.stamina -= dt / 6.5; me.stamRegen = 0.9;
-      if (me.stamina <= 0) { me.stamina = 0; me.exhausted = true; }
-    } else if ((me.stamRegen -= dt) <= 0) me.stamina = Math.min(1, me.stamina + dt / 4);
+    const sprintRequest = shift && !me.reloading && !(this.vm.animName || '').startsWith('knife');
     // hold breath while scoped
     const scoped = (this.scopeK || 0) > 0.6;
     me.holdBreath = scoped && shift && me.breath > 0;
@@ -1639,44 +1837,46 @@ class Game {
       const room = clamp(raycast(this.map, me.pos.x, me.pos.z, rx, rz, 0.8) - 0.2, 0, 0.4);
       me.leanOff = me.lean * Math.min(0.4, room);
     } else me.leanOff = 0;
-    let speed = me.crouch ? 1.8 : me.sprint ? 5.6 : 3.3;
-    if (stick > 0 && !this.down('forward') && !this.down('back') && !this.down('left') && !this.down('right')) speed *= Math.max(0.35, stick); // analog walk
-    speed *= (w.moveMul || 1) * (1 - me.ads * 0.35) * (1 - Math.abs(me.lean) * 0.35);
     const sy = Math.sin(me.yaw), cy = Math.cos(me.yaw);
-    let wx = -sy * f + cy * s, wz = -cy * f - sy * s;
-    const wl = Math.hypot(wx, wz);
-    if (wl > 0) { wx = wx / wl * speed; wz = wz / wl * speed; }
-    const acc = me.onGround ? 11 : 1.5;
-    me.vel.x = damp(me.vel.x, wx, acc, dt);
-    me.vel.z = damp(me.vel.z, wz, acc, dt);
-    const jump = this.down('jump') || this.padJump;
+    const motion = me.motion, input = me.motionInput;
+    motion.x = me.pos.x; motion.y = me.pos.y; motion.z = me.pos.z;
+    motion.vx = me.vel.x; motion.vz = me.vel.z; motion.vy = me.vy;
+    motion.onGround = me.onGround; motion.stamina = me.stamina; motion.exhausted = me.exhausted;
+    const modal = this.shop || this.mapOpen || this.clickToResume || this.endData;
+    input.forward = modal ? 0 : f; input.side = modal ? 0 : s; input.yaw = me.yaw;
+    input.sprint = !modal && sprintRequest; input.crouch = me.crouch; input.ads = me.ads;
+    input.moveMul = (w.moveMul || 1) * (1 - Math.abs(me.lean) * 0.35) * (me.role === 'monster' ? 1.18 : 1);
+    input.jump = !modal && (this.down('jump') || this.padJump || !!this.pad.down?.[BTN.A]);
     this.padJump = false;
-    if (jump && me.onGround && !me.crouch && me.stamina > 0.08) { me.vy = 3.9; me.onGround = false; me.stamina -= 0.08; me.stamRegen = 0.9; }
-    me.vy -= 13 * dt;
-    me.pos.y += me.vy * dt;
-    if (me.pos.y <= 0) {
-      if (!me.onGround && me.vy < -3) { me.trauma = Math.min(1, me.trauma + 0.15); me.land = Math.min(1, -me.vy / 6); this.sound.play('st_land', { cat: 'step', vol: 0.4 }); }
-      me.pos.y = 0; me.vy = 0; me.onGround = true;
+    const ox = motion.x, oz = motion.z;
+    stepMovement(this.map, motion, input, dt);
+    if (me.role === 'monster' && this.creatureTouchesSafe(motion.x, motion.z)) {
+      motion.x = ox; motion.z = oz; motion.vx = motion.vz = 0;
     }
-    const p = { x: me.pos.x + me.vel.x * dt, z: me.pos.z + me.vel.z * dt };
-    // other operators are solid
     for (const r of this.remotes.values()) {
-      if (!r.alive || !r.model.root.visible) continue;
-      const dx = p.x - r.x, dz = p.z - r.z, d = Math.hypot(dx, dz), min = PLAYER_R * 2;
-      if (d < min && d > 1e-4) { p.x += (dx / d) * (min - d); p.z += (dz / d) * (min - d); }
+      if (!r.alive || Math.abs(motion.y - r.y) > 1.6) continue;
+      const dx = motion.x - r.x, dz = motion.z - r.z, d = Math.hypot(dx, dz), min = PLAYER_R * 2;
+      if (d < min && d > 1e-4) { motion.x += dx / d * (min - d); motion.z += dz / d * (min - d); }
     }
-    collide(this.map, p, PLAYER_R);
-    me.pos.x = p.x; me.pos.z = p.z;
+    collide(this.map, motion, PLAYER_R);
+    if (me.role === 'monster' && this.creatureTouchesSafe(motion.x, motion.z)) { motion.x = ox; motion.z = oz; motion.vx = motion.vz = 0; }
+    me.pos.set(motion.x, motion.y, motion.z); me.vel.set(motion.vx, 0, motion.vz); me.vy = motion.vy;
+    me.onGround = motion.onGround; me.stamina = motion.stamina; me.exhausted = motion.exhausted; me.sprint = motion.sprint; me.crouch = motion.crouch;
+    if (motion.landed && motion.impactSpeed > 3) {
+      me.land = Math.min(1, motion.impactSpeed / 7); me.trauma = Math.min(1, me.trauma + motion.impactSpeed * 0.018);
+      this.sound.land(null, { vol: 0.35, surface: this.layout === 'arena' ? 'concrete' : 'carpet' });
+    }
+    this.safeZone = this.mode === 'escape' ? safeAt(this.map, me.pos.x, me.pos.z) : -1;
+    if (this.mapOpen && this.safeZone < 0) this.closeMap(false);
     me.crouchK = damp(me.crouchK, me.crouch ? 1 : 0, 10, dt);
     me.sprintK = damp(me.sprintK, me.sprint ? 1 : 0, 8, dt);
     const hs = Math.hypot(me.vel.x, me.vel.z);
     if (me.onGround) {
       me.bob += hs * dt * (me.sprint ? 1.75 : 2.2);
       me.stepAcc += hs * dt;
-      if (me.stepAcc > (me.sprint ? 2.1 : 1.6)) {
+      if (me.stepAcc > (me.crouch ? 1.05 : me.sprint ? 2.05 : 1.55)) {
         me.stepAcc = 0;
-        this.sound.step(null, { run: me.sprint, vol: me.crouch ? 0.05 : me.sprint ? 0.28 : 0.16 });
-        if (!me.crouch && Math.random() < (me.sprint ? 0.6 : 0.25)) this.sound.play('gear', { cat: 'step', vol: me.sprint ? 0.2 : 0.1 });
+        this.sound.step(null, { run: me.sprint, crouch: me.crouch, id: this.myId, surface: this.layout === 'arena' ? 'concrete' : 'carpet', vol: me.crouch ? 0.05 : me.sprint ? 0.38 : 0.24 });
         if (!me.crouch) this.net.send({ t: 'step', run: me.sprint ? 1 : 0 });
       }
     }
@@ -1687,7 +1887,7 @@ class Game {
     this.findInteractable();
     // walking over health, armor, grenades, ammo and money takes them when they are useful;
     // a gun is taken the same way when its slot is empty (or it is the one in hand and you need its ammo)
-    for (const d of this.drops.values()) {
+    if (me.role !== 'monster') for (const d of this.drops.values()) {
       if (d.fly || this.time < (d.tryAt || 0)) continue;
       const dx = d.x - me.pos.x, dz = d.z - me.pos.z;
       if (Math.abs(dx) > 1.1 || Math.abs(dz) > 1.1 || Math.hypot(dx, dz) > (d.k === 'weapon' ? 0.8 : 1.0)) continue;
@@ -1706,6 +1906,7 @@ class Game {
   // Only the heading counts (no need to look down at the floor and lose your aim); looking at the ceiling uses nothing.
   findInteractable() {
     const me = this.me, px = me.pos.x, pz = me.pos.z, fx = -Math.sin(me.yaw), fz = -Math.cos(me.yaw);
+    if (me.role === 'monster') { this.nearDrop = this.nearVendor = null; this.nearCrate = -1; return; }
     let kind = 0, target = null, bestS = 1;
     if (me.pitch < 0.6) {
       for (const d of this.drops.values()) {
@@ -1748,6 +1949,7 @@ class Game {
 
   updateWeapon(dt) {
     const me = this.me, s = this.cur(), type = s.w, w = WEAPONS[type];
+    if (this.isPaused() && !this.net?.online) return;
     me.fireT = Math.max(me.fireT - dt, -dt);
     me.bloom = Math.max(0, me.bloom - dt * (w.modes[0] === 'auto' ? 2.2 : 3));
     me.kickP = damp(me.kickP, 0, 9, dt); me.kickY = damp(me.kickY, 0, 9, dt);
@@ -1774,7 +1976,7 @@ class Game {
       if (me.cookT >= GRENADE.fuse - 0.02) { me.cookT = GRENADE.fuse; this.throwNade(); this.vm.play('nade_throw', 0.45); }
       else if (!me.nadeHeld && an === 'nade_hold') this.vm.play('nade_throw', 0.45);
     }
-    if (!me.alive || this.isPaused() || this.endData || this.shop) return;
+    if (!me.alive || this.isPaused() || this.endData || this.shop || this.mapOpen) return;
     // knife
     if (w.melee) {
       if (!an || isInspect(an)) {
@@ -1857,6 +2059,17 @@ class Game {
       } else cam.position.set(me.pos.x, me.pos.y + lerp(eye, 0.28, e), me.pos.z);
       cam.rotation.set(lerp(me.pitch, 0.25, e) + (dp?.spinA || 0), me.deathYaw, lerp(0, 1.25, e));
     }
+    if (this.mode === 'escape' && !me.alive && !this.endData && (me.spectator || this.time - me.deathAt > 2)) {
+      for (const r of this.remotes.values()) {
+        if (!r.alive || this.names.get(r.id)?.role === 'monster') continue;
+        const bx = Math.sin(r.yaw), bz = Math.cos(r.yaw);
+        const back = Math.max(0.05, raycast(this.map, r.x, r.z, bx, bz, 0.85) - 0.2);
+        cam.position.set(r.x + bx * back, r.y + EYE_STAND + 0.2, r.z + bz * back);
+        cam.rotation.set(r.pitch - 0.05, r.yaw, 0);
+        break;
+      }
+    }
+    this.creatureVision.intensity = this.state === 'game' && me.role === 'monster' ? 1.05 : 0;
     const adsF = w.scope ? lerp(1, w.adsFov, this.scopeK) * lerp(1, 0.92, me.ads) : lerp(1, w.adsFov || 1, me.ads);
     const fov = settings.fov * adsF + me.fovPunch * (1 - this.scopeK);
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); this.updatePointScale(); }
@@ -1865,8 +2078,10 @@ class Game {
     cam.updateMatrixWorld();
     // flashlight (chest mounted, slightly right)
     const fl = this.flashlight;
-    fl.intensity = me.flash && me.alive ? 40 : 0;
+    fl.intensity = me.flash && me.alive && me.role !== 'monster' ? 40 : 0;
+    fl.shadow.needsUpdate = fl.intensity > 0 || !fl.shadow.map;
     fl.position.copy(cam.position).add(this.v1.set(0.12, -0.05, 0).applyQuaternion(cam.quaternion));
+    this.clampFlashMount(fl.position, me.pos.x, me.pos.z);
     fl.target.position.copy(cam.position).add(this.v1.set(0, 0, -10).applyQuaternion(cam.quaternion));
     fl.target.updateMatrixWorld();
     this.sound.listener(cam.position, this.v2.set(0, 0, -1).applyQuaternion(cam.quaternion), this.v3.set(0, 1, 0).applyQuaternion(cam.quaternion));
@@ -1880,7 +2095,7 @@ class Game {
     const cyw = Math.cos(me.yaw), syw = Math.sin(me.yaw);
     me.inertX = damp(me.inertX, clamp(-(me.vel.x * cyw - me.vel.z * syw) * 0.006, -0.03, 0.03), 7, dt);
     me.inertZ = damp(me.inertZ, clamp((me.vel.x * syw + me.vel.z * cyw) * 0.005, -0.03, 0.03), 7, dt);
-    this.vm.root.visible = this.scopeK < 0.6 && !(!me.alive && me.deathT > 0.6);
+    this.vm.root.visible = this.scopeK < 0.6 && !me.spectator && !(!me.alive && me.deathT > 0.6);
     this.vm.update(dt, {
       time: this.time, ads: a, sprintK: me.sprintK, bob: me.bob, bobAmt, swayX: me.swayX, swayY: me.swayY, inertX: me.inertX, inertZ: me.inertZ,
       crouchK: me.crouchK, lean: me.lean, block: me.block, land: me.land, alive: me.alive, deathT: me.deathT, slideBack: me.slideBack,
@@ -1923,15 +2138,15 @@ class Game {
       // hear enemies reload
       if (r.alive && (r.flags & F.RELOAD) && !(was & F.RELOAD) && dist < 25) {
         const p = this.v1.set(r.x, r.y + 1.1, r.z), occl = this.occluded(p), now = this.sound.now();
-        this.sound.mech('mag_out_r', 0.35, p, now);
-        this.sound.play('mag_in_r', { cat: 'mech', pos: p, vol: 0.35, ref: 1.5, occl, when: now + 1.1 });
+        this.sound.mech('mag_out_r', 0.35, p, now, occl);
+        this.sound.mech('mag_in_r', 0.35, p, now + 1.1, occl);
       }
-      if (r.alive && r.speed > 1 && !(r.flags & F.CROUCH) && r.y < 0.05) {
+      if (r.alive && r.speed > 0.5 && r.y < 0.45) {
         r.stepAcc += r.speed * dt;
-        if (r.stepAcc > 1.7) {
+        if (r.stepAcc > (r.flags & F.CROUCH ? 1.05 : r.speed > 4.2 ? 2.05 : 1.55)) {
           r.stepAcc = 0;
           const sp = this.v1.set(r.x, 0.1, r.z);
-          if (dist < 32) this.sound.step(sp, { run: r.speed > 4.2, vol: r.speed > 4.2 ? 0.55 : 0.35, occl: this.occluded(sp) });
+          if (dist < 30) this.sound.step(sp, { id: r.id, run: r.speed > 4.2, crouch: !!(r.flags & F.CROUCH), dist, surface: this.layout === 'arena' ? 'concrete' : 'carpet', vol: r.flags & F.CROUCH ? 0.09 : r.speed > 4.2 ? 0.52 : 0.36, occl: this.occluded(sp) });
         }
       }
     }
@@ -1967,24 +2182,36 @@ class Game {
     L.end();
   }
 
-  // the two nearest remote flashlights get real spot lights (aimed from the gun muzzle)
+  creatureTouchesSafe(x, z) {
+    return this.mode === 'escape' && (safeAt(this.map, x, z) >= 0 || safeAt(this.map, x + PLAYER_R, z) >= 0
+      || safeAt(this.map, x - PLAYER_R, z) >= 0 || safeAt(this.map, x, z + PLAYER_R) >= 0 || safeAt(this.map, x, z - PLAYER_R) >= 0);
+  }
+
+  clampFlashMount(position, x, z) {
+    const dx = position.x - x, dz = position.z - z, d = Math.hypot(dx, dz);
+    if (d < 0.001) return;
+    const room = Math.max(0, raycast(this.map, x, z, dx / d, dz / d, d + 0.08) - 0.06);
+    if (room < d) { position.x = x + dx / d * room; position.z = z + dz / d * room; }
+  }
+
   updateRemoteFlashlights() {
-    const cp = this.camera.position, list = [];
+    const cp = this.camera.position;
+    let first = null, second = null, d1 = 32, d2 = 32;
     for (const r of this.remotes.values()) {
-      if (!r.alive || !(r.flags & F.FLASH) || !r.model.root.visible) continue;
+      if (!r.alive || !(r.flags & F.FLASH) || !r.model.root.visible || this.names.get(r.id)?.role === 'monster') continue;
       const d = Math.hypot(r.x - cp.x, r.z - cp.z);
-      if (d < 32) list.push([d, r]);
+      if (d < d1) { second = first; d2 = d1; first = r; d1 = d; }
+      else if (d < d2) { second = r; d2 = d; }
     }
-    list.sort((a, b) => a[0] - b[0]);
-    this.remoteFlash.forEach((L, i) => {
-      const r = list[i] && list[i][1];
-      if (!r) { L.intensity = 0; return; }
-      r.model.muzzleWorld(L.position);
+    for (let i = 0; i < this.remoteFlash.length; i++) {
+      const L = this.remoteFlash[i], r = i ? second : first;
+      if (!r) { L.intensity = 0; L.shadow.needsUpdate = !L.shadow.map; continue; }
       const fx = -Math.sin(r.yaw) * Math.cos(r.pitch), fy = Math.sin(r.pitch), fz = -Math.cos(r.yaw) * Math.cos(r.pitch);
+      L.position.set(r.x + fx * 0.36, r.y + (r.flags & F.CROUCH ? 0.9 : 1.3), r.z + fz * 0.36);
+      this.clampFlashMount(L.position, r.x, r.z);
       L.target.position.set(L.position.x + fx * 10, L.position.y + fy * 10, L.position.z + fz * 10);
-      L.target.updateMatrixWorld();
-      L.intensity = 32;
-    });
+      L.target.updateMatrixWorld(); L.intensity = 32; L.shadow.needsUpdate = true;
+    }
   }
 
   // positional buzz of the nearest flickering troffer + random far-off noises of the level
@@ -2021,13 +2248,20 @@ class Game {
       let lead = me.kills;
       for (const r of this.remotes.values()) lead = Math.max(lead, r.kills);
       hud.match(this.endData ? 0 : Math.max(0, this.tl - (this.time - this.tlAt)), me.kills, me.deaths, lead, this.fragLimit, this.mode === 'tdm' ? { score: this.teamScore, mine: this.myTeam } : null);
-      hud.vitals(me.hp, me.armor, me.holdBreath || (this.scopeK > 0.6) ? me.breath : me.stamina);
+      const breathBar = me.holdBreath || this.scopeK > 0.6;
+      hud.vitals(me.hp, me.armor, breathBar ? me.breath : me.stamina / STAMINA_MAX);
+      hud.set('stvalue', 'text', String(Math.round((breathBar ? me.breath : me.stamina) * 100)));
+      hud.set('stamLabel', 'text', breathBar ? 'NEFES' : 'DAYANIKLILIK');
+      this.updateEscapeHud();
+      if (this.mode === 'escape') hud.set('kd', 'text', `TAHLİYE ${this.escapeState?.escaped ?? 0} / ${this.escapeState?.total ?? 0}`);
+      hud.set('movementCue', 'text', me.alive && me.motion.hopCount > 1 ? `BUNNY ×${me.motion.hopCount} · ${Math.hypot(me.vel.x, me.vel.z).toFixed(1)} m/s` : '');
       hud.weapon(s.w, s.mode, s.mag, s.res, me.reloading, w.mag || 1);
-      hud.slots(me.inv, me.pendingSlot || me.slot);
+      if (me.role === 'monster') { hud.set('wname', 'text', 'YARATIK PENÇELERİ'); hud.set('wmode', 'text', 'SOL: PENÇE · SAĞ: AĞIR SALDIRI'); }
+      hud.slots(me.inv, me.pendingSlot || me.slot, me.role);
       hud.protect(me.alive && this.time < me.protectUntil);
       const useKey = this.pad.active && !this.locked ? 'X' : keyLabel(settings.binds.use);
       const d = this.nearDrop;
-      if (this.shop || !me.alive) hud.prompt(null);
+      if (this.shop || this.mapOpen || !me.alive || me.role === 'monster') hud.prompt(null);
       else if (d && d.k === 'weapon') {
         const W = WEAPONS[d.w], held = me.inv[W.slot], a = d.a | 0;
         const att = a ? ` <span class="att">${ATTACHMENTS.filter((x) => a & x.bit).map((x) => esc(x.label)).join(' · ')}</span>` : '';
@@ -2037,8 +2271,12 @@ class Game {
         hud.prompt(this.useful(d) ? `<b>[${useKey}]</b> ${label} <span style="opacity:.6">· üzerinden geçerek de alınır</span>` : `${label} <span style="opacity:.6">· ${this.fullText(d).toLowerCase()}</span>`);
       } else if (this.nearCrate >= 0) hud.prompt(`<b>[${useKey}]</b> Sandığı aç`);
       else if (this.nearVendor) hud.prompt(`<b>[${useKey}]</b> Badem suyu otomatı <span class="cashc">$${me.cash}</span>`);
+      else if (this.mode === 'escape' && this.safeZone >= 0) hud.prompt(`<b>[${useKey}]</b> Sığınak haritasını incele`);
       else hud.prompt(null);
-      if (!me.alive) hud.respawn(Math.max(0, RESPAWN_T - (this.time - me.deathAt)));
+      if (!me.alive) {
+        if (this.mode === 'escape') hud.set('respawn', 'text', 'Sonraki turda yeniden doğacaksın.');
+        else hud.respawn(Math.max(0, RESPAWN_T - (this.time - me.deathAt)));
+      }
       if (this.scoreOpen) this.renderScore();
       if (this.endData) hud.endCount(this.endData.next - (this.time - this.endAt));
       if (me.alive && me.ads < 0.9) {
@@ -2055,7 +2293,7 @@ class Game {
       if (me.beatT <= 0) { me.beatT = 0.85; this.sound.ui('heart', 0.6); }
     }
     // heavy breathing: while out of stamina, or for a few seconds after a bad hit (not endlessly while hurt)
-    const winded = me.stamina < 0.4 ? 1 - me.stamina / 0.4 : 0;
+    const winded = me.stamina < STAMINA_MAX * 0.25 ? 1 - me.stamina / (STAMINA_MAX * 0.25) : 0;
     const shaken = me.hp < 25 && this.time - (me.hurtAt ?? -99) < 6 ? 0.6 : 0;
     const need = me.alive && !this.isPaused() ? Math.max(winded, shaken) : 0;
     if (need > 0) {
@@ -2080,10 +2318,10 @@ class Game {
   }
 
   renderScore() {
-    const rows = [{ id: this.myId, name: settings.name, k: this.me.kills, d: this.me.deaths, hs: this.me.hs, bot: false, alive: this.me.alive, team: this.myTeam }];
-    for (const r of this.remotes.values()) { const n = this.names.get(r.id); rows.push({ id: r.id, name: n?.name || '?', k: r.kills, d: r.deaths, hs: r.hs, bot: n?.bot, alive: r.alive, team: n?.team ?? -1 }); }
+    const rows = [{ id: this.myId, name: settings.name, k: this.me.kills, d: this.me.deaths, hs: this.me.hs, bot: false, alive: this.me.alive, team: this.myTeam, role: this.me.role, escaped: this.me.escaped }];
+    for (const r of this.remotes.values()) { const n = this.names.get(r.id); rows.push({ id: r.id, name: n?.name || '?', k: r.kills, d: r.deaths, hs: r.hs, bot: n?.bot, alive: r.alive, team: n?.team ?? -1, role: n?.role, escaped: n?.escaped }); }
     rows.sort((a, b) => b.k - a.k || a.d - b.d);
-    this.hud.scoreboard(true, rows, this.myId, this.fragLimit, this.net?.online ? this.ping : null, this.mode === 'tdm' ? { score: this.teamScore, mine: this.myTeam } : null);
+    this.hud.scoreboard(true, rows, this.myId, this.fragLimit, this.net?.online ? this.ping : null, this.mode === 'tdm' ? { score: this.teamScore, mine: this.myTeam } : null, this.mode);
   }
 }
 
@@ -2102,6 +2340,8 @@ for (const b of document.querySelectorAll('#nav button[data-p]')) {
     document.querySelectorAll('.menu-right .panel').forEach((p) => p.classList.toggle('hidden', p.id !== 'p-' + b.dataset.p));
     if (b.dataset.p === 'settings') $('settingsHome').appendChild($('settingsBox'));
     if (b.dataset.p === 'profile') $('careerBox').innerHTML = careerHtml();
+    if (b.dataset.p === 'online') refreshOnlineStatus();
+    if (b.dataset.p === 'customize') { game.customizer ||= buildCustomizer($('customizeBox')); game.customizer.refresh(); }
   };
   b.onmouseenter = () => game.sound.ui('ui_hover', 0.3);
 }
@@ -2111,26 +2351,94 @@ if (location.search.includes('desktop')) {
 }
 $('bots').value = settings.bots; $('botsv').textContent = settings.bots;
 $('diff').value = settings.diff; $('frags').value = settings.frags; $('mtime').value = settings.time; $('gmode').value = settings.mode;
-const modeLabel = () => { $('fragsLabel').textContent = settings.mode === 'tdm' ? 'Takım skor limiti' : 'Leş limiti'; };
+function modeLabel() {
+  const escape = settings.mode === 'escape';
+  if (escape) { settings.layout = 'escape'; settings.light = 'dark'; }
+  else if (settings.layout === 'escape') settings.layout = 'maze';
+  if (settings.layout === 'arena') settings.bots = Math.min(settings.bots, 9);
+  $('gmap').value = settings.layout; $('gmap').disabled = escape;
+  $('glight').value = settings.light; $('glight').disabled = escape;
+  $('bots').max = settings.layout === 'arena' ? 9 : 11; $('bots').value = settings.bots; $('botsv').textContent = settings.bots;
+  $('frags').disabled = escape; $('fragsLabel').textContent = escape ? 'Hedef: çıkışa ulaş' : settings.mode === 'tdm' ? 'Takım skor limiti' : 'Leş limiti';
+  $('roleRow').classList.toggle('hidden', !escape);
+  $('grole').value = settings.escapeRole;
+  $('mapHint').textContent = escape ? 'Yaklaşık 6× alan. Işıklı sığınaklarda haritayı incele; yaratık ışığa giremez. Çıkış veya yaratığı etkisiz hale getirme gezginleri kurtarır.'
+    : settings.layout === 'arena' ? '40 × 40 m simetrik depo · üç açık hat · iki takım için beşer başlangıç noktası.' : 'Prosedürel Seviye 0 labirenti · her tur farklı güzergâh.';
+}
 modeLabel();
-$('gmode').onchange = () => { settings.mode = $('gmode').value; saveSettings(); modeLabel(); };
+$('gmode').onchange = () => { settings.mode = $('gmode').value; modeLabel(); saveSettings(); };
+$('gmap').onchange = () => { settings.layout = $('gmap').value; if (settings.layout === 'escape') settings.mode = 'escape'; $('gmode').value = settings.mode; modeLabel(); saveSettings(); };
+$('grole').onchange = () => { settings.escapeRole = $('grole').value; $('onlineRole').value = settings.escapeRole; saveSettings(); };
+$('btnArenaPreset').onclick = () => { settings.mode = 'tdm'; settings.layout = 'arena'; settings.light = 'normal'; settings.bots = 9; $('gmode').value = 'tdm'; modeLabel(); saveSettings(); };
 $('glight').value = settings.light;
 $('glight').onchange = () => { settings.light = $('glight').value; saveSettings(); };
 $('bots').oninput = () => { settings.bots = +$('bots').value; $('botsv').textContent = settings.bots; saveSettings(); };
+$('onlineBots').value = settings.onlineBots; $('onlineBotsv').textContent = settings.onlineBots;
+$('onlineBots').oninput = () => { settings.onlineBots = +$('onlineBots').value; $('onlineBotsv').textContent = settings.onlineBots; saveSettings(); };
+function onlineChoices(active = false, info = null) {
+  if (active && info) {
+    $('onlineMode').value = info.mode; $('onlineMap').value = info.layout || 'maze'; $('onlineLight').value = info.light;
+  } else {
+    if (settings.onlineMode === 'escape') { settings.onlineLayout = 'escape'; settings.onlineLight = 'dark'; }
+    else if (settings.onlineLayout === 'escape') settings.onlineLayout = 'maze';
+    $('onlineMode').value = settings.onlineMode; $('onlineMap').value = settings.onlineLayout; $('onlineLight').value = settings.onlineLight;
+  }
+  const escape = $('onlineMode').value === 'escape';
+  $('onlineMode').disabled = active; $('onlineMap').disabled = active || escape; $('onlineLight').disabled = active || escape;
+  $('onlineRoleRow').classList.toggle('hidden', !escape); $('onlineRole').value = settings.escapeRole;
+}
+onlineChoices();
+$('onlineMode').onchange = () => { settings.onlineMode = $('onlineMode').value; onlineChoices(); saveSettings(); };
+$('onlineMap').onchange = () => { settings.onlineLayout = $('onlineMap').value; if (settings.onlineLayout === 'escape') settings.onlineMode = 'escape'; onlineChoices(); saveSettings(); };
+$('onlineLight').onchange = () => { settings.onlineLight = $('onlineLight').value; saveSettings(); };
+$('onlineRole').onchange = () => { settings.escapeRole = $('onlineRole').value; $('grole').value = settings.escapeRole; saveSettings(); };
 $('diff').onchange = () => { settings.diff = +$('diff').value; saveSettings(); };
 $('frags').onchange = () => { settings.frags = +$('frags').value; saveSettings(); };
 $('mtime').onchange = () => { settings.time = +$('mtime').value; saveSettings(); };
 $('btnCareerReset').onclick = () => { if (confirm('Tüm kariyer istatistikleri silinsin mi?')) { resetCareer(); $('careerBox').innerHTML = careerHtml(); } };
 let onlineOk = false;
+let onlineProbe = 0;
 $('btnOffline').onclick = () => game.start('offline');
 $('btnOnline').onclick = () => { if (onlineOk) game.start('online'); };
-if (location.protocol.startsWith('http')) {
-  Net.online(1500).then(async (n) => {
-    n.close(); onlineOk = true;
+async function refreshOnlineStatus() {
+  const probe = ++onlineProbe;
+  onlineOk = false;
+  $('btnOnline').disabled = true;
+  if (!location.protocol.startsWith('http')) {
+    $('onlineInfo').textContent = 'Çok oyunculu oynamak için oyunu bir web adresinden aç.';
+    return;
+  }
+  $('onlineInfo').textContent = 'Sunucu kontrol ediliyor…';
+  try {
+    const net = await Net.online(4000);
+    net.close();
+    const response = await fetch('/info', { cache: 'no-store' });
+    if (!response.ok) throw new Error('server info unavailable');
+    const info = await response.json();
+    if (probe !== onlineProbe) return;
+    onlineOk = true;
     $('btnOnline').disabled = false;
-    let lan = [];
-    try { const info = await (await fetch('/info')).json(); lan = info.lan.map((ip) => `http://${ip}:${info.port}`); } catch { /* older server */ }
-    $('onlineInfo').innerHTML = `Sunucu aktif. Aynı ağdaki arkadaşların şu adresi açarak katılabilir:<br><b class="addr">${esc(lan[0] || location.origin)}</b>${lan.length > 1 ? `<br><span class="small">${lan.slice(1).map(esc).join(' · ')}</span>` : ''}`;
-  }).catch(() => { $('onlineInfo').textContent = 'Sunucu bulunamadı. Çok oyunculu için "npm start" ile sunucuyu başlat.'; });
-} else $('onlineInfo').textContent = 'Dosyadan açıldı. Çok oyunculu için "npm start" ile sunucuyu başlat.';
+    const active = info.players > 0;
+    onlineChoices(active, info);
+    const count = active ? (info.selectedBots ?? info.bots) : settings.onlineBots;
+    $('onlineBots').disabled = active;
+    $('onlineBots').value = count;
+    $('onlineBotsv').textContent = count;
+    $('onlineBotsNote').textContent = active
+      ? `Aktif maçta ${info.players} oyuncu ve ${info.bots} bot var. Herkes ayrılınca yeni bot sayısı seçilebilir.`
+      : '0–10 bot seçebilirsin. İlk katılan oyuncunun seçimi bu maç için geçerli olur.';
+    const host = location.hostname;
+    const loopback = host === 'localhost' || host === '[::1]' || /^127\./.test(host);
+    const privateNetwork = loopback || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+    let addresses = [location.origin];
+    if (loopback) {
+      if (info.lan?.length) addresses = info.lan.map((ip) => `http://${ip}:${info.port}`);
+    }
+    const message = privateNetwork ? 'Sunucu aktif. Aynı ağdaki arkadaşların şu adresi açabilir:' : 'Sunucu aktif. Discord\'da arkadaşlarınla şu adresi paylaş:';
+    $('onlineInfo').innerHTML = `${message}<br><b class="addr">${esc(addresses[0])}</b>${addresses.length > 1 ? `<br><span class="small">${addresses.slice(1).map(esc).join(' · ')}</span>` : ''}`;
+  } catch {
+    if (probe === onlineProbe) $('onlineInfo').textContent = 'Sunucuya bağlanılamadı. Sayfayı yenileyip tekrar dene.';
+  }
+}
+refreshOnlineStatus();
 game.boot().catch((e) => { console.error(e); $('loadtext').textContent = 'Başlatma hatası: ' + e.message; });

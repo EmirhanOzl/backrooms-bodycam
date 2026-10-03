@@ -46,13 +46,13 @@ export class BodycamPost {
     this.final = new THREE.ShaderMaterial({
       uniforms: {
         tScene: { value: null }, tBloom: { value: null }, uRes: { value: new THREE.Vector2(1, 1) }, uTime: { value: 0 },
-        uK: { value: 0.32 }, uZoom: { value: 0.8 }, uCA: { value: 0.07 }, uGrain: { value: 0.07 }, uExposure: { value: 1.0 },
-        uBloom: { value: 0.9 }, uBlur: { value: new THREE.Vector2() }, uHurt: { value: 0 }, uLow: { value: 0 }, uDead: { value: 0 }, uFlash: { value: 0 },
-        uLens: { value: 1 }, uScope: { value: 0 }, uSway: { value: new THREE.Vector2() },
+        uK: { value: 0.32 }, uZoom: { value: 0.8 }, uCA: { value: 0.035 }, uGrain: { value: 0.035 }, uExposure: { value: 1.0 },
+        uBloom: { value: 0.48 }, uBlur: { value: new THREE.Vector2() }, uHurt: { value: 0 }, uLow: { value: 0 }, uDead: { value: 0 }, uFlash: { value: 0 },
+        uLens: { value: 1 }, uScope: { value: 0 }, uSway: { value: new THREE.Vector2() }, uCreature: { value: 0 },
       },
       vertexShader: VS,
       fragmentShader: `
-        uniform sampler2D tScene, tBloom; uniform vec2 uRes, uBlur, uSway; uniform float uTime, uK, uZoom, uCA, uGrain, uExposure, uBloom, uHurt, uLow, uDead, uFlash, uLens, uScope;
+        uniform sampler2D tScene, tBloom; uniform vec2 uRes, uBlur, uSway; uniform float uTime, uK, uZoom, uCA, uGrain, uExposure, uBloom, uHurt, uLow, uDead, uFlash, uLens, uScope, uCreature;
         varying vec2 vUv;
         vec2 distort(vec2 uv, float k){
           vec2 c = uv - 0.5; float asp = uRes.x / uRes.y; c.x *= asp;
@@ -84,6 +84,8 @@ export class BodycamPost {
           col += texture2D(tBloom, uvG).rgb * uBloom;
           col *= uExposure * (1.0 + uFlash);
           col = aces(col);
+          float night = dot(col, vec3(0.2126, 0.7152, 0.0722));
+          col = mix(col, vec3(night) * vec3(0.65, 0.93, 1.08), uCreature * 0.85);
           // bodycam grade: slight desaturation, lifted blacks, cool-green shadows, warm highlights
           float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
           col = mix(vec3(l), col, 0.86 - uLow * 0.45 - uDead * 0.7);
@@ -117,6 +119,12 @@ export class BodycamPost {
         }`,
       depthTest: false, depthWrite: false,
     });
+  }
+
+  dispose() {
+    this.rtScene.dispose(); this.rtA.dispose(); this.rtB.dispose();
+    this.bright.dispose(); this.blur.dispose(); this.final.dispose();
+    this.quad.geometry.dispose();
   }
 
   setSize(w, h) {

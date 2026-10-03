@@ -1,6 +1,6 @@
 // Procedural textures (canvas) — no external assets needed.
 import * as THREE from 'three';
-import { mulberry32 } from './shared/map.js';
+import { CELL, mulberry32 } from './shared/map.js';
 
 function canvas(w, h) {
   const c = document.createElement('canvas');
@@ -161,6 +161,88 @@ export function ceilingTexture() {
   for (let ty = 0; ty <= S; ty += th) { x.fillStyle = '#b9b4a0'; x.fillRect(0, ty - 3, S, 6); x.fillStyle = 'rgba(60,50,30,0.35)'; x.fillRect(0, ty + 3, S, 2); }
   for (let tx = 0; tx <= S; tx += tw) { x.fillStyle = '#b9b4a0'; x.fillRect(tx - 3, 0, 6, S); x.fillStyle = 'rgba(60,50,30,0.35)'; x.fillRect(tx + 3, 0, 2, S); }
   return tex(c);
+}
+
+// Neutral concrete/painted steel replaces yellow wallpaper in the depot.
+export function industrialTextures(surface = 'wall') {
+  const S = 512, R = mulberry32(surface === 'floor' ? 91 : 93);
+  const [c, x] = canvas(S, S), [bc, bx] = canvas(S, S);
+  const image = x.createImageData(S, S), height = bx.createImageData(S, S);
+  const noise = makeNoise(R, 32), base = surface === 'floor' ? [113, 120, 122] : [151, 161, 165];
+  for (let y = 0; y < S; y++) for (let px = 0; px < S; px++) {
+    const i = (y * S + px) * 4;
+    const n = (R() - 0.5) * 12 + (noise(px / 12, y / 12) - 0.5) * 16;
+    const seam = surface === 'floor' ? px % 128 < 2 || y % 128 < 2 : y % 170 < 3;
+    const shade = seam ? -28 : n;
+    for (let k = 0; k < 3; k++) {
+      image.data[i + k] = base[k] + shade;
+      height.data[i + k] = seam ? 78 : 128 + n * 1.5;
+    }
+    image.data[i + 3] = height.data[i + 3] = 255;
+  }
+  x.putImageData(image, 0, 0); bx.putImageData(height, 0, 0);
+  if (surface === 'wall') {
+    x.fillStyle = '#55656b'; x.fillRect(0, S - 48, S, 48);
+    x.fillStyle = '#bac2c4'; x.fillRect(0, S - 48, S, 3);
+    x.fillStyle = '#414b50';
+    for (let px = 32; px < S; px += 128) for (let y = 16; y < S; y += 170) {
+      x.beginPath(); x.arc(px, y, 2.5, 0, Math.PI * 2); x.fill();
+    }
+  }
+  return { map: tex(c), bump: tex(bc, { srgb: false }) };
+}
+
+export function industrialCeilingTexture() {
+  const [c, x] = canvas(512, 512);
+  x.fillStyle = '#abb5b9'; x.fillRect(0, 0, 512, 512);
+  for (let y = 0; y < 512; y += 32) {
+    x.fillStyle = '#7e8a90'; x.fillRect(0, y, 512, 5);
+    x.fillStyle = '#ced5d8'; x.fillRect(0, y + 5, 512, 3);
+  }
+  x.fillStyle = '#556369'; x.fillRect(0, 0, 10, 512); x.fillRect(256, 0, 10, 512);
+  return tex(c);
+}
+
+export function signTexture(title, subtitle = '', color = '#a3ffd0') {
+  const [c, x] = canvas(512, 160);
+  x.fillStyle = '#101e1b'; x.fillRect(0, 0, 512, 160);
+  x.strokeStyle = color; x.lineWidth = 6; x.strokeRect(6, 6, 500, 148);
+  x.fillStyle = color; x.textAlign = 'center';
+  x.font = 'bold 68px sans-serif'; x.fillText(title, 256, 84, 475);
+  x.font = 'bold 23px sans-serif'; x.fillText(subtitle, 256, 127, 470);
+  return tex(c, { repeat: false });
+}
+
+export function sanctuaryMapTexture(map, zone) {
+  const [c, x] = canvas(640, 720);
+  x.fillStyle = '#d4dfd4'; x.fillRect(0, 0, 640, 720);
+  x.fillStyle = '#16362c'; x.font = 'bold 31px sans-serif'; x.textAlign = 'center';
+  x.fillText('TESİS PLANI', 320, 43);
+  x.font = '19px sans-serif'; x.fillText(zone.label, 320, 70);
+  const ox = 35, oz = 94, scale = 570 / Math.max(map.W, map.H);
+  x.fillStyle = '#9daaa0'; x.fillRect(ox, oz, map.W * scale, map.H * scale);
+  for (const s of map.safeZones) {
+    x.fillStyle = s.id === zone.id ? '#00b875' : '#6bc698';
+    for (const cell of s.cells) x.fillRect(ox + (cell % map.W) * scale, oz + ((cell / map.W) | 0) * scale, scale, scale);
+  }
+  x.strokeStyle = '#34483d'; x.lineWidth = 1.1;
+  x.beginPath();
+  for (let z = 0; z <= map.H; z++) for (let cx = 0; cx < map.W; cx++) if (map.h[z * map.W + cx] === 1) {
+    x.moveTo(ox + cx * scale, oz + z * scale); x.lineTo(ox + (cx + 1) * scale, oz + z * scale);
+  }
+  for (let z = 0; z < map.H; z++) for (let cx = 0; cx <= map.W; cx++) if (map.v[z * (map.W + 1) + cx] === 1) {
+    x.moveTo(ox + cx * scale, oz + z * scale); x.lineTo(ox + cx * scale, oz + (z + 1) * scale);
+  }
+  x.stroke();
+  const marker = (p, label, color) => {
+    const px = ox + p.x / CELL * scale, py = oz + p.z / CELL * scale;
+    x.fillStyle = color; x.beginPath(); x.arc(px, py, 7, 0, Math.PI * 2); x.fill();
+    x.font = 'bold 14px sans-serif'; x.textAlign = 'left'; x.fillText(label, Math.min(px + 10, 560), py - 10);
+  };
+  marker(map.start, 'GİRİŞ', '#215ab2'); marker(map.exit, 'ÇIKIŞ', '#b54d22'); marker(zone, 'BURADASIN', '#006c42');
+  x.fillStyle = '#16362c'; x.textAlign = 'center'; x.font = 'bold 20px sans-serif';
+  x.fillText('E — HARİTA  •  IŞIKTA GÜVENDESİN', 320, 696, 585);
+  return tex(c, { repeat: false });
 }
 
 // Troffer diffuser (prismatic lens)
