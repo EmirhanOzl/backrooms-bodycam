@@ -33,6 +33,17 @@
     <div id="protect">KORUMA AKTİF</div>
     <div id="resume" class="hidden">OYUNA DÖNMEK İÇİN TIKLA</div>
     <div id="prompt"></div>
+    <div id="escapeObjective" class="hidden" aria-live="polite"></div>
+    <div id="hitdamage" aria-live="off"></div>
+    <div id="movementCue"></div>
+    <div id="mapOverlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="mapTitle">
+      <div class="map-panel">
+        <div class="map-heading"><div><h2 id="mapTitle">M.E.G. TAHLİYE PLANI</h2><p id="mapLocation"></p></div><button id="btnMapClose" class="ghost small">KAPAT · ESC</button></div>
+        <canvas id="escapeMap" width="880" height="880" aria-label="Labirent, güvenli odalar ve çıkış haritası"></canvas>
+        <div class="map-legend"><span class="safe">IŞIKLI SIĞINAK</span><span class="exit">ÇIKIŞ</span><span class="you">SİZ</span></div>
+        <p class="desc small">Güzergâhı ezberle. Harita yalnızca ışıklı odalarda incelenebilir; karanlıkta minimap yoktur. Maç devam ediyor.</p>
+      </div>
+    </div>
     <div id="toasts"></div>
     <div id="streak"></div>
     <div id="payout"></div>
@@ -41,7 +52,7 @@
       <div id="cash"><span class="cur">$</span><span id="cashv">0</span><span id="cashadd"></span></div>
       <div class="bar"><label>SAĞLIK</label><div class="track"><div id="hpbar"></div></div><span id="hp">100</span></div>
       <div class="bar"><label>ZIRH</label><div class="track"><div id="arbar"></div></div><span id="ar">0</span></div>
-      <div class="bar thin" id="stam"><label>NEFES</label><div class="track"><div id="stbar"></div></div><span></span></div>
+      <div class="bar thin" id="stam"><label id="stamLabel">DAYANIKLILIK</label><div class="track"><div id="stbar"></div></div><span id="stvalue">300</span></div>
     </div>
     <div id="weapon">
       <div id="wname">G17 TABANCA</div>
@@ -65,20 +76,25 @@
         <button data-p="offline" class="on">BOTLARA KARŞI</button>
         <button data-p="online">ÇOK OYUNCULU</button>
         <button data-p="profile">PROFİL</button>
+        <button data-p="customize">OPERATÖR TASARLA</button>
         <button data-p="settings">AYARLAR</button>
         <button data-p="controls">KONTROLLER</button>
         <button data-p="about">HAKKINDA</button>
         <button id="btnExit" class="hidden">ÇIKIŞ</button>
       </nav>
-      <div class="ver">v1.2.0 · ERKEN ERİŞİM</div>
+      <div class="ver">v1.3.0 · ARENA / DERİN LABİRENT</div>
     </div>
     <div class="menu-right">
       <section id="p-offline" class="panel">
         <h3>ÇEVRİMDIŞI · BOTLARA KARŞI</h3>
-        <p class="desc">Herkes herkese karşı ya da iki takım halinde. Kutular ve cesetler ganimet saçar; leşlerden para kazan, badem suyu otomatlarından silah, zırh ve eklenti al.</p>
-        <div class="row"><span class="lab">Mod</span><select id="gmode"><option value="ffa">Herkes herkese (FFA)</option><option value="tdm">Takım çatışması (TDM)</option></select></div>
+        <p class="desc">Taktik çatışmaya katıl veya karanlıkta çıkışı ara. Işıklı odalar yaratığı durdurur; haritayı sığınaklarda ezberle, karanlığa takım halinde çık.</p>
+        <div class="row"><label class="lab" for="gmode">Mod</label><select id="gmode"><option value="ffa">Herkes herkese (FFA)</option><option value="tdm">Takım çatışması (TDM)</option><option value="escape">Karanlıktan kaçış</option></select></div>
+        <div class="row"><label class="lab" for="gmap">Harita</label><select id="gmap"><option value="maze">Seviye 0 · 72 × 72 m</option><option value="arena">M.E.G. Deposu · 5v5 arena</option><option value="escape">Derin Labirent · 176 × 176 m</option></select></div>
+        <p id="mapHint" class="desc small"></p>
+        <button id="btnArenaPreset" class="ghost small">5v5 ARENA HAZIRLA</button>
+        <div class="row hidden" id="roleRow"><label class="lab" for="grole">Rol tercihi</label><select id="grole"><option value="survivor">Gezgin · çıkışa ulaş</option><option value="monster">Yaratık · karanlıkta avla</option></select></div>
         <div class="row"><span class="lab">Işıklandırma</span><select id="glight"><option value="normal">Normal</option><option value="dim">Loş — bozuk floresanlar</option><option value="dark">Karartma — fener şart</option></select></div>
-        <div class="row"><span class="lab">Bot sayısı</span><input id="bots" type="range" min="1" max="11" value="6"><span id="botsv" class="val">6</span></div>
+        <div class="row"><label class="lab" for="bots">Bot sayısı</label><input id="bots" type="range" min="0" max="11" value="6"><span id="botsv" class="val">6</span></div>
         <div class="row"><span class="lab">Zorluk</span><select id="diff"><option value="0">Kolay</option><option value="1" selected>Normal</option><option value="2">Zor</option></select></div>
         <div class="row"><span class="lab" id="fragsLabel">Leş limiti</span><select id="frags"><option>10</option><option selected>20</option><option>30</option><option>50</option></select></div>
         <div class="row"><span class="lab">Süre</span><select id="mtime"><option value="5">5 dk</option><option value="10" selected>10 dk</option><option value="15">15 dk</option><option value="20">20 dk</option></select></div>
@@ -87,12 +103,17 @@
       <section id="p-online" class="panel hidden">
         <h3>ÇOK OYUNCULU · PVP</h3>
         <p id="onlineInfo" class="desc">Sunucu kontrol ediliyor…</p>
-        <p class="desc small">Arkadaşların aynı oyun adresini açıp SUNUCUYA KATIL'a bassın. İlk katılan kişi bot sayısını belirler; arkadaşların sonradan katılsa da bot sayısı değişmez.</p>
+        <p class="desc small">İlk katılan kişi mod, harita ve bot sayısını belirler. Arena en fazla 10 oyuncu, takım başına 5 kişi alır. Kaçışta tek yaratık vardır; rol doluysa gezgin olarak katılırsın.</p>
+        <div class="row"><label class="lab" for="onlineMode">Mod</label><select id="onlineMode"><option value="ffa">Herkes herkese (FFA)</option><option value="tdm">Takım çatışması (TDM)</option><option value="escape">Karanlıktan kaçış</option></select></div>
+        <div class="row"><label class="lab" for="onlineMap">Harita</label><select id="onlineMap"><option value="maze">Seviye 0</option><option value="arena">M.E.G. Deposu · 5v5</option><option value="escape">Derin Labirent · kaçış</option></select></div>
+        <div class="row"><label class="lab" for="onlineLight">Işıklandırma</label><select id="onlineLight"><option value="normal">Normal</option><option value="dim">Loş</option><option value="dark">Karartma</option></select></div>
+        <div class="row hidden" id="onlineRoleRow"><label class="lab" for="onlineRole">Rol tercihi</label><select id="onlineRole"><option value="survivor">Gezgin</option><option value="monster">Yaratık (tek kişi)</option></select></div>
         <div class="row"><label class="lab" for="onlineBots">Bizimle oynayacak botlar</label><input id="onlineBots" type="range" min="0" max="10" step="1" value="5"><span id="onlineBotsv" class="val">5</span></div>
         <p id="onlineBotsNote" class="desc small">0–10 bot seçebilirsin.</p>
         <button id="btnOnline" class="big" disabled>SUNUCUYA KATIL</button>
       </section>
       <section id="p-profile" class="panel hidden"><h3>OPERATÖR KAYDI</h3><div id="careerBox"></div><button id="btnCareerReset" class="ghost small">KAYDI SIFIRLA</button></section>
+      <section id="p-customize" class="panel hidden"><h3>OPERATÖR ATÖLYESİ</h3><p class="desc">Kafa, göğüs ve bacak donanımını ayrı seç. Görünümün kaydedilir ve diğer oyunculara aktarılır; donanım sağlık veya hitbox avantajı sağlamaz.</p><div id="customizeBox"></div></section>
       <section id="p-settings" class="panel hidden"><h3>AYARLAR</h3><div id="settingsHome"></div></section>
       <section id="p-controls" class="panel hidden"><h3>KONTROLLER</h3><div id="controlsBox"></div></section>
       <section id="p-about" class="panel hidden">

@@ -1,14 +1,15 @@
-// Sound engine: plays pre-synthesized buffers (sfx.js) through a small mixer.
-//   voices ─┬─> sfx ─> duck ─┐
-//           ├─> amb ──────────┼─> master ─> muffle(lowpass) ─> post ─> limiter ─> out
-//           └─> ui  ──────────────────────────────────────────┘
-//   reverb sends ─> convolver ─> sfx
-// Every voice is one AudioBufferSourceNode + gain (+ panner / occlusion filter when needed),
-// capped per category with oldest-voice stealing, so heavy firefights never overload the audio thread.
+// Pre-synthesized voices keep runtime DSP small. Weapon-only compression leaves foot contacts readable.
+//   gun/boom -> weapon dynamics ─┐
+//   step ----> contact bus ──────┼-> sfx -> blast duck -> master -> muffle -> limiter -> safety -> out
+//   other sfx ------------------┘                         ↑
+//   ambience ---------------------------------------------┘
+//   UI --------------------------------------------------------------> limiter
+// Occluded, distance-attenuated sends feed a quiet wet-only room IR; the dry HRTF stays dominant.
 import { soundList, synthOne } from './sfx.js';
 
-const CAPS = { fp: 10, gun: 14, imp: 10, step: 8, mech: 8, ui: 6, amb: 4, misc: 12, boom: 4 };
-const LOUD = { pistol: 0.8, revolver: 1, smg: 0.72, shotgun: 1, rifle: 0.95, m4: 0.9, sniper: 1.05 };
+const CAPS = { fp: 8, gun: 20, imp: 14, step: 24, mech: 10, ui: 8, amb: 4, misc: 10, boom: 3 };
+const LOUD = { pistol: 0.78, revolver: 0.96, smg: 0.68, shotgun: 0.98, rifle: 0.88, m4: 0.82, sniper: 1.05 };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export class Sound {
   constructor() {
@@ -19,44 +20,62 @@ export class Sound {
     this.hrtf = true;
     this.voices = {};
     this.lastVar = {};
+    this.stepPhases = new Map();
+    this.environment = 'maze';
   }
 
   // Creates the context (suspended until a user gesture on most browsers) and synthesizes the bank.
   async load(onProgress = () => {}) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) throw new Error('WebAudio unavailable');
-    const ctx = (this.ctx = new AC({ latencyHint: 'interactive' }));
+    const ctx = (this.ctx = new AC({ latencyHint: 'interactive', sampleRate: 48000 }));
     this.buildGraph();
     const items = [];
-    for (const [name, n] of soundList()) for (let v = 0; v < n; v++) items.push([name, v]);
+    for (const [name, n] of soundList()) {
+      this.bank[name] = new Array(n);
+      for (let v = 0; v < n; v++) items.push([name, v]);
+    }
     const total = items.length;
     let done = 0;
     const accept = (name, v, chs) => {
+      if (this.bank[name]?.[v]) return;
+      if (!this.bank[name] || !Array.isArray(chs) || !chs.length) throw new Error(`Invalid sound bank entry: ${name}[${v}]`);
       const n = Math.max(...chs.map((c) => c.length));
+      if (!n) throw new Error(`Empty sound bank entry: ${name}[${v}]`);
       const b = ctx.createBuffer(chs.length, n, ctx.sampleRate);
       chs.forEach((c, i) => b.copyToChannel(c instanceof Float32Array ? c : new Float32Array(c), i));
-      (this.bank[name] ||= [])[v] = b;
+      this.bank[name][v] = b;
       onProgress(++done / total);
     };
-    let workers = [];
+    const workers = [];
     try {
       const nW = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
-      workers = Array.from({ length: nW }, () => new Worker(new URL('./sfx-worker.js', import.meta.url), { type: 'module' }));
+      for (let i = 0; i < nW; i++) workers.push(new Worker(new URL('./sfx-worker.js', import.meta.url), { type: 'module' }));
       await Promise.all(workers.map((wk, i) => new Promise((resolve, reject) => {
-        wk.onmessage = (e) => { if (e.data.done) resolve(); else accept(e.data.name, e.data.v, e.data.chs); };
-        wk.onerror = (e) => reject(e);
+        wk.onmessage = ({ data }) => {
+          try {
+            if (data.error) reject(new Error(data.error));
+            else if (data.done) resolve();
+            else accept(data.name, data.v, data.chs);
+          } catch (e) { reject(new Error(`Sound transfer ${data.name}[${data.v}]: ${e.message || e}`)); }
+        };
+        wk.onerror = (e) => { e.preventDefault(); reject(new Error(e.message || 'Sound synthesis worker failed')); };
+        wk.onmessageerror = () => reject(new Error('Sound synthesis worker transfer failed'));
         wk.postMessage({ sr: ctx.sampleRate, items: items.filter((_, j) => j % nW === i) });
       })));
     } catch (e) {
-      console.warn('sound worker unavailable, synthesizing on the main thread', e);
-      for (const [name, v] of items) {
-        if (this.bank[name]?.[v]) continue;
+      console.warn('sound worker unavailable, synthesizing remaining sounds on the main thread', e.message || e);
+    } finally { workers.forEach((w) => w.terminate()); }
+    // Fill missing entries even if a worker ended early; transferred entries are never synthesized twice.
+    for (const [name, v] of items) {
+      if (this.bank[name][v]) continue;
+      try {
         const out = synthOne(name, v, ctx.sampleRate);
         accept(name, v, Array.isArray(out) ? out : [out]);
-        if (done % 8 === 0) await new Promise((r) => setTimeout(r, 0));
-      }
-    } finally { workers.forEach((w) => w.terminate()); }
-    this.verb.buffer = this.bank.ir[0];
+      } catch (e) { throw new Error(`Sound synthesis ${name}[${v}]: ${e.message || e}`); }
+      if (done % 8 === 0) await new Promise((r) => setTimeout(r, 0));
+    }
+    this.setEnvironment({ layout: this.environment });
     this.ready = true;
     this.startHum();
   }
@@ -68,21 +87,49 @@ export class Sound {
     const ctx = this.ctx;
     const G = (v = 1) => { const g = ctx.createGain(); g.gain.value = v; return g; };
     this.limiter = ctx.createDynamicsCompressor();
-    Object.entries({ threshold: -4, knee: 2, ratio: 16, attack: 0.001, release: 0.12 }).forEach(([k, v]) => { this.limiter[k].value = v; });
-    this.limiter.connect(ctx.destination);
+    Object.entries({ threshold: -5, knee: 2, ratio: 12, attack: 0.002, release: 0.08 }).forEach(([k, v]) => { this.limiter[k].value = v; });
+    this.safety = ctx.createWaveShaper();
+    const curve = new Float32Array(1025);
+    for (let i = 0; i < curve.length; i++) {
+      const x = i * 2 / (curve.length - 1) - 1, a = Math.abs(x);
+      curve[i] = a <= 0.78 ? x : Math.sign(x) * (0.78 + 0.18 * Math.tanh((a - 0.78) / 0.18));
+    }
+    this.safety.curve = curve;
+    this.limiter.connect(this.safety).connect(ctx.destination);
     this.post = G(1); this.post.connect(this.limiter);
     this.muffle = ctx.createBiquadFilter(); this.muffle.type = 'lowpass'; this.muffle.frequency.value = 20000; this.muffle.Q.value = 0.5;
     this.muffle.connect(this.post);
     this.master = G(this.vol.master); this.master.connect(this.muffle);
     this.duck = G(1); this.duck.connect(this.master);
     this.sfx = G(this.vol.sfx); this.sfx.connect(this.duck);
+    this.weaponBus = G(0.72);
+    this.weaponComp = ctx.createDynamicsCompressor();
+    Object.entries({ threshold: -16, knee: 8, ratio: 3.5, attack: 0.002, release: 0.065 }).forEach(([k, v]) => { this.weaponComp[k].value = v; });
+    this.weaponBus.connect(this.weaponComp).connect(this.sfx);
+    this.stepBus = G(1.25); this.stepBus.connect(this.sfx);
     this.amb = G(this.vol.amb); this.amb.connect(this.master);
     this.uiOut = G(this.vol.master); this.uiOut.connect(this.post);
     this.uiBus = G(this.vol.ui); this.uiBus.connect(this.uiOut);
+    this.ringOut = G(this.vol.master * this.vol.sfx); this.ringOut.connect(this.post);
     this.verbIn = G(1);
     this.verb = ctx.createConvolver();
-    this.verbOut = G(0.55);
-    this.verbIn.connect(this.verb).connect(this.verbOut).connect(this.sfx);
+    this.verb.normalize = false;
+    this.verbOut = G(0.7);
+    this.verbHP = ctx.createBiquadFilter(); this.verbHP.type = 'highpass'; this.verbHP.frequency.value = 150;
+    this.verbLP = ctx.createBiquadFilter(); this.verbLP.type = 'lowpass'; this.verbLP.frequency.value = 5600;
+    this.verbIn.connect(this.verb).connect(this.verbHP).connect(this.verbLP).connect(this.verbOut).connect(this.sfx);
+  }
+
+  setEnvironment({ layout = 'maze' } = {}) {
+    this.environment = layout === 'arena' || layout === 'escape' ? layout : 'maze';
+    const buffer = this.bank['ir_' + this.environment]?.[0];
+    if (!this.verb || !buffer) return;
+    if (this.irLayout !== this.environment) {
+      this.verb.buffer = buffer;
+      this.irLayout = this.environment;
+    }
+    this.verbOut.gain.setTargetAtTime(this.environment === 'arena' ? 0.8 : this.environment === 'escape' ? 0.55 : 0.7, this.ctx.currentTime, 0.05);
+    this.setHum(this.humLevel ?? 0.9);
   }
 
   setVolumes(v) {
@@ -94,6 +141,7 @@ export class Sound {
     this.sfx.gain.setTargetAtTime(this.vol.sfx, t, 0.02);
     this.amb.gain.setTargetAtTime(this.vol.amb, t, 0.02);
     this.uiBus.gain.setTargetAtTime(this.vol.ui, t, 0.02);
+    this.ringOut.gain.setTargetAtTime(this.vol.master * this.vol.sfx, t, 0.02);
   }
 
   listener(p, f, u) {
@@ -107,82 +155,120 @@ export class Sound {
   }
 
   // ------------------------------------------------------------------ voices
-  // o: { cat, vol, rate, jitter, pos, ref, rolloff, occl, verb, lp, when, bus, v }
+  // o: { cat, vol, rate, jitter, pos, ref, rolloff, reach, occl, wallGain, wallHz, verb, lp, when, bus, v }
   play(name, o = {}) {
-    if (!this.ready) return null;
+    if (!this.ready || this.ctx.state !== 'running') return null;
     const list = this.bank[name];
     if (!list) return null;
     const ctx = this.ctx;
-    // avoid repeating the same variant twice in a row
     let vi = o.v ?? ((Math.random() * list.length) | 0);
     if (o.v == null && list.length > 1 && vi === this.lastVar[name]) vi = (vi + 1) % list.length;
     this.lastVar[name] = vi;
-    const when = Math.max(ctx.currentTime, o.when || 0);
-    const cat = o.cat || 'misc';
+    const when = Math.max(ctx.currentTime, o.when || 0), cat = o.cat || 'misc';
     const vs = (this.voices[cat] ||= []);
     if (vs.length >= (CAPS[cat] || 8)) {
-      const old = vs.shift();
-      try { old.g.gain.setTargetAtTime(0, ctx.currentTime, 0.008); old.src.stop(ctx.currentTime + 0.05); } catch { /* already stopped */ }
+      const old = vs.shift(), t = ctx.currentTime;
+      old.g.gain.cancelScheduledValues(t);
+      old.g.gain.setValueAtTime(old.g.gain.value, t);
+      old.g.gain.linearRampToValueAtTime(0, t + 0.014);
+      try { old.src.stop(t + 0.018); } catch { /* already ended */ }
     }
+    const occ = o.occl === true ? 1 : typeof o.occl === 'number' ? clamp(o.occl, 0, 1) : 0;
     const src = ctx.createBufferSource();
     src.buffer = list[vi];
-    const j = o.jitter ?? 0.03;
-    src.playbackRate.value = (o.rate ?? 1) * (1 + (Math.random() * 2 - 1) * j);
+    src.playbackRate.value = (o.rate ?? 1) * (1 + (Math.random() * 2 - 1) * (o.jitter ?? 0.015));
     const g = ctx.createGain();
-    g.gain.value = (o.vol ?? 1) * (o.occl ? 0.5 : 1);
+    g.gain.value = Math.max(0, o.vol ?? 1) * Math.pow(o.wallGain ?? 0.32, occ);
     src.connect(g);
+    const nodes = [src, g];
     let head = g;
-    const lpF = o.occl ? Math.min(o.lp || 20000, 750) : o.lp;
-    if (lpF && lpF < 18000) { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lpF; f.Q.value = 0.5; head.connect(f); head = f; }
+    const lpF = occ ? Math.min(o.lp || 20000, 20000 * Math.pow((o.wallHz ?? 900) / 20000, occ)) : o.lp;
+    if (lpF && lpF < 18000) {
+      const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lpF; f.Q.value = 0.5;
+      head.connect(f); head = f; nodes.push(f);
+    }
     if (o.pos) {
       const p = ctx.createPanner();
       p.panningModel = this.hrtf ? 'HRTF' : 'equalpower';
-      p.distanceModel = 'inverse'; p.refDistance = o.ref ?? 2; p.rolloffFactor = o.rolloff ?? 1.1; p.maxDistance = 120;
+      p.distanceModel = o.reach ? 'linear' : 'inverse';
+      p.refDistance = o.ref ?? 2; p.rolloffFactor = o.rolloff ?? 1.1; p.maxDistance = o.reach || 120;
       if (p.positionX) { p.positionX.value = o.pos.x; p.positionY.value = o.pos.y; p.positionZ.value = o.pos.z; }
       else p.setPosition(o.pos.x, o.pos.y, o.pos.z);
-      head.connect(p); head = p;
+      head.connect(p); head = p; nodes.push(p);
     }
-    head.connect(o.bus || this.sfx);
-    const vg = (o.verb ?? 0) * (o.occl ? 1.6 : 1);
-    if (vg > 0) { const s = ctx.createGain(); s.gain.value = vg; head.connect(s).connect(this.verbIn); }
+    const bus = o.bus || (cat === 'ui' ? this.uiBus : cat === 'amb' ? this.amb : cat === 'step' ? this.stepBus : cat === 'fp' || cat === 'gun' || cat === 'boom' ? this.weaponBus : this.sfx);
+    head.connect(bus);
+    const vg = (o.verb ?? 0) * (1 - occ * 0.65);
+    if (vg > 0) {
+      const send = ctx.createGain(); send.gain.value = vg;
+      head.connect(send).connect(this.verbIn); nodes.push(send);
+    }
     const voice = { src, g };
     vs.push(voice);
-    src.onended = () => { const i = vs.indexOf(voice); if (i >= 0) vs.splice(i, 1); head.disconnect(); };
+    src.onended = () => {
+      const i = vs.indexOf(voice); if (i >= 0) vs.splice(i, 1);
+      for (const node of nodes) node.disconnect();
+      src.onended = null;
+    };
     src.start(when);
     return voice;
   }
 
   // ------------------------------------------------------------------ semantic helpers
   shot(type, { fp = false, pos = null, dist = 0, occl = false, when = 0, sup = false } = {}) {
-    const L = LOUD[type] || 0.9;
+    const L = LOUD[type] || 0.85;
     if (sup && this.bank['sp_' + type]) {
-      if (fp) { this.play('sp_' + type, { cat: 'fp', vol: L * 0.55, verb: 0.3, when, jitter: 0.02 }); return; }
-      if (dist > 45) return;
-      this.play('sn_' + type, { cat: 'gun', pos, vol: L * 0.7, ref: 2.5, rolloff: 1.4, occl, when, jitter: 0.03, verb: 0.35 });
-      return;
+      if (fp) return this.play('sp_' + type, { cat: 'fp', vol: L * 0.68, verb: 0.08, when, jitter: 0.008 });
+      if (dist > 48) return null;
+      return this.play('sn_' + type, { cat: 'gun', pos, vol: L * 0.8, ref: 3.5, rolloff: 1.3, occl, when, jitter: 0.01, verb: 0.08, wallGain: 0.25 });
     }
-    if (fp) { this.play('fp_' + type, { cat: 'fp', vol: L * 0.9, verb: 0.5, when, jitter: 0.02 }); return; }
-    const far = dist > 30;
-    this.play((far ? 'fr_' : 'np_') + type, {
-      cat: 'gun', pos, vol: L * (far ? 1.5 : 1.1), ref: far ? 16 : 5, rolloff: far ? 0.8 : 1.05, occl, when, jitter: 0.03,
-      verb: far ? 0.2 : 0.65, lp: !far && dist > 12 ? 16000 / (1 + (dist - 12) / 9) : 0,
+    if (fp) return this.play('fp_' + type, { cat: 'fp', vol: L * 0.86, verb: 0.14, when, jitter: 0.008 });
+    if (dist > 120) return null;
+    // Distant reports lose high-frequency detail without an artificial loudness boost.
+    const far = dist > 34, air = dist > 12 ? 17000 / (1 + (dist - 12) / 14) : 0;
+    return this.play((far ? 'fr_' : 'np_') + type, {
+      cat: 'gun', pos, vol: L, ref: 5, rolloff: 1.05, occl, when, jitter: 0.01,
+      verb: far ? 0.07 : 0.14, lp: air, wallGain: 0.38, wallHz: 1100,
     });
   }
   impact(kind, pos, dist = 5, occl = false) {
     if (dist > 45) return;
     const name = { player: 'im_flesh', head: 'im_head', plate: 'im_plate', wall: 'im_wall', floor: 'im_floor', ceil: 'im_ceil' }[kind] || 'im_wall';
-    this.play(name, { cat: 'imp', pos, vol: kind === 'player' || kind === 'head' ? 0.75 : 0.5, ref: 2.5, occl, verb: 0.25 });
+    this.play(name, { cat: 'imp', pos, vol: kind === 'player' || kind === 'head' ? 0.7 : 0.46, ref: 2.5, occl, verb: 0.08 });
   }
   whiz(pos, k, when) { this.play('whiz', { cat: 'imp', pos, vol: 0.35 + 0.6 * k, ref: 1.5, when, verb: 0.05 }); }
-  step(pos, { run = false, vol = 0.3, occl = false } = {}) {
-    this.play(run ? 'st_run' : 'st_walk', { cat: 'step', pos, vol, ref: 1.6, rolloff: 1.3, occl, verb: 0.08, jitter: 0.06 });
+  step(pos, { run = false, vol, occl = false, surface = 'carpet', crouch = false, id = null, foot, dist = 0, when = 0 } = {}) {
+    if (!this.ready) return null;
+    const reach = crouch ? 6 : run ? 27 : 18;
+    if (dist >= reach) return null;
+    const name = 'st_' + (crouch ? 'crouch' : run ? 'run' : 'walk') + (surface === 'concrete' ? '_concrete' : '');
+    const key = id ?? (pos ? 'remote' : 'local');
+    let phase = this.stepPhases.get(key);
+    if (!phase) {
+      if (this.stepPhases.size >= 64) this.stepPhases.delete(this.stepPhases.keys().next().value);
+      phase = { foot: 0, last: [-1, -1] }; this.stepPhases.set(key, phase);
+    }
+    const side = foot == null ? phase.foot : (foot & 1), pairs = this.bank[name].length / 2;
+    let pair = (Math.random() * pairs) | 0;
+    if (pairs > 1 && pair === phase.last[side]) pair = (pair + 1) % pairs;
+    phase.last[side] = pair; phase.foot = 1 - side;
+    return this.play(name, {
+      cat: 'step', pos, vol: vol ?? (crouch ? 0.09 : run ? 0.52 : 0.36), ref: 1.6, rolloff: 1, reach,
+      occl, wallGain: 0.2, wallHz: 800, verb: surface === 'concrete' ? 0.07 : 0.035, jitter: 0.012, v: pair * 2 + side, when,
+    });
   }
-  mech(name, vol = 0.5, pos = null, when = 0) { return this.play(name, { cat: 'mech', vol, pos, ref: 1.5, verb: pos ? 0.2 : 0.12, when, jitter: 0.03 }); }
+  land(pos, { vol = 0.5, occl = false, surface = 'carpet', dist = 0, when = 0 } = {}) {
+    if (dist >= 30) return null;
+    return this.play(surface === 'concrete' ? 'st_land_concrete' : 'st_land', { cat: 'step', pos, vol, ref: 2, reach: 30, rolloff: 1, occl, wallGain: 0.22, wallHz: 850, verb: 0.06, jitter: 0.01, when });
+  }
+  mech(name, vol = 0.5, pos = null, when = 0, occl = false) {
+    return this.play(name, { cat: 'mech', vol, pos, ref: 1.5, reach: pos ? 16 : 0, rolloff: 1, occl, wallGain: 0.2, verb: pos ? 0.05 : 0.035, when, jitter: 0.015 });
+  }
   ui(name, vol = 0.5, when = 0) { return this.play(name, { cat: 'ui', vol, bus: this.uiBus, when, jitter: 0 }); }
 
   explosion(pos, dist, occl) {
     const near = dist < 32;
-    this.play(near ? 'gr_boom' : 'gr_far', { cat: 'boom', pos, vol: near ? 1.4 : 1.2, ref: near ? 7 : 20, rolloff: 0.9, occl, verb: 0.9, jitter: 0.02 });
+    this.play(near ? 'gr_boom' : 'gr_far', { cat: 'boom', pos, vol: near ? 1.05 : 0.9, ref: near ? 7 : 20, rolloff: 0.9, occl, verb: 0.2, jitter: 0.01 });
     if (dist < 9 && !occl) {
       // the blast itself is heard at full level; the ears shut down right after it
       const k = 1 - dist / 9;
@@ -215,18 +301,25 @@ export class Sound {
     g.linearRampToValueAtTime(Math.min(v, level), t + 0.04); g.linearRampToValueAtTime(1, t + 0.04 + sec);
   }
   tinnitus(sec, vol, delay = 0) {
-    if (!this.ctx) return;
-    const ctx = this.ctx, t = ctx.currentTime + delay;
-    const o = ctx.createOscillator(); o.frequency.value = 3800 + Math.random() * 500;
-    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol * this.vol.master, t + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, t + sec);
-    o.connect(g).connect(this.post); o.start(t); o.stop(t + sec + 0.05);
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    const ctx = this.ctx, now = ctx.currentTime, t = now + delay;
+    if (this.ringVoice) {
+      this.ringVoice.g.gain.cancelScheduledValues(now);
+      this.ringVoice.g.gain.setTargetAtTime(0.0001, now, 0.006);
+      try { this.ringVoice.o.stop(now + 0.025); } catch { /* already ended */ }
+    }
+    const o = ctx.createOscillator(); o.frequency.value = 3800 + Math.random() * 300;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(Math.max(0.0001, vol), t + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, t + sec);
+    const voice = { o, g }; this.ringVoice = voice;
+    o.onended = () => { o.disconnect(); g.disconnect(); o.onended = null; if (this.ringVoice === voice) this.ringVoice = null; };
+    o.connect(g).connect(this.ringOut); o.start(t); o.stop(t + sec + 0.05);
   }
 
   // ------------------------------------------------------------------ ambience (live, few nodes)
   startHum() {
     if (this.humG) return;
     const ctx = this.ctx, g = (this.humG = ctx.createGain());
-    g.gain.value = 0.9;
+    g.gain.value = (this.humLevel ?? 0.9) * (this.environment === 'escape' ? 0.3 : 1);
     g.connect(this.amb);
     const mk = (type, f, filt, ff, q, v) => {
       const o = ctx.createOscillator(); o.type = type; o.frequency.value = f;
@@ -235,19 +328,19 @@ export class Sound {
       o.connect(flt).connect(gg).connect(g); o.start();
       return gg;
     };
-    const saw = mk('sawtooth', 120, 'bandpass', 360, 2, 0.022);
-    mk('sine', 60, 'lowpass', 200, 0.7, 0.03);
-    mk('square', 240, 'lowpass', 900, 0.7, 0.006);
+    const saw = mk('sawtooth', 120, 'bandpass', 360, 2, 0.012);
+    mk('sine', 60, 'lowpass', 200, 0.7, 0.014);
+    mk('square', 240, 'lowpass', 900, 0.7, 0.003);
     // faint ballast hiss
     const hiss = ctx.createBufferSource();
     const nb =ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate), d = nb.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     hiss.buffer = nb; hiss.loop = true;
     const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 5000;
-    const hg = ctx.createGain(); hg.gain.value = 0.005;
+    const hg = ctx.createGain(); hg.gain.value = 0.0025;
     hiss.connect(hp).connect(hg).connect(g); hiss.start();
     const lfo = ctx.createOscillator(); lfo.frequency.value = 0.13;
-    const lg = ctx.createGain(); lg.gain.value = 0.008;
+    const lg = ctx.createGain(); lg.gain.value = 0.004;
     lfo.connect(lg).connect(saw.gain); lfo.start();
     // flickering-troffer buzz (positional, follows the nearest flickering light)
     const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 120;
@@ -261,7 +354,10 @@ export class Sound {
     bpf.connect(this.buzzG).connect(this.buzzP).connect(this.amb);
     o.start(); o2.start();
   }
-  setHum(level) { if (this.humG) this.humG.gain.setTargetAtTime(level, this.ctx.currentTime, 0.3); }
+  setHum(level) {
+    this.humLevel = level;
+    if (this.humG) this.humG.gain.setTargetAtTime(level * (this.environment === 'escape' ? 0.3 : 1), this.ctx.currentTime, 0.3);
+  }
   buzz(pos, level) {
     if (!this.buzzG) return;
     const t = this.ctx.currentTime;
@@ -287,6 +383,6 @@ export class Sound {
     const w = [3, 3, 3, 2, 2, 2, 0.6];
     let x = Math.random() * w.reduce((a, b) => a + b, 0), i = 0;
     while ((x -= w[i]) > 0) i++;
-    this.play(pick[i], { cat: 'amb', pos, vol: 0.9, ref: 8, rolloff: 0.6, bus: this.amb, verb: 0.3 });
+    this.play(pick[i], { cat: 'amb', pos, vol: 0.5, ref: 8, rolloff: 0.8, bus: this.amb });
   }
 }

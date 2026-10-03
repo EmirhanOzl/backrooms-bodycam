@@ -55,7 +55,7 @@ export const TIPS = [
   'Kulaklık tak ve 3D sesi aç: adımlardan ve şarjör seslerinden düşmanın yerini bulabilirsin.',
   'Duvarların arkasından gelen sesler boğuktur; net duyuyorsan görüş hattındadır.',
   'Pompalı doldururken ateşe basarsan o anki fişekten sonra doldurma durur.',
-  'R700 ile dürbündeyken Shift\'e basılı tutarak nefesini tut; titreme azalır.',
+  'AWP ile dürbündeyken Shift\'e basılı tutarak nefesini tut; titreme azalır. Zırhlı hedefe de tek isabet yeter.',
   'Eğilmek (Z / X) köşeden bakarken vücudunun çoğunu saklar.',
   'Zırh plakası yalnızca gövdeyi korur; kafaya ve bacaklara gelen isabetler tam işler.',
   'Ölen operatörlerin silahları yerde 45 saniye kalır — daha iyisini bulduysan değiştir.',

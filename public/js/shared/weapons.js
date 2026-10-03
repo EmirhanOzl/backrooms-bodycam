@@ -1,5 +1,5 @@
 // Shared weapon stats (server + client). spread values are radians (cone half-angle).
-// Balance (100 HP), point-blank body shots-to-kill: G17 4, .357 2, MP5 5, AK 3, M4 4, M870 one full blast, R700 1 (unarmored).
+// Balance (100 HP), point-blank body shots-to-kill: G17 4, .357 2, MP5 5, AK 3, M4 4, M870 one full blast, AWP 1.
 // Legs deal 75%. Armor plates only cover the torso (and soak part of explosions).
 // slot: 'primary' | 'secondary' | 'melee'.  cls drives viewmodel animation + sound families.
 export const WEAPON_ORDER = ['pistol', 'revolver', 'smg', 'shotgun', 'rifle', 'm4', 'sniper', 'knife'];
@@ -26,23 +26,24 @@ export const WEAPONS = {
   shotgun: {
     label: 'M870 POMPALI', short: 'M870', slot: 'primary', cls: 'shotgun', dmg: 12, head: 1.6, rpm: 70, modes: ['pump'], mag: 6, reserve: 18, maxReserve: 42,
     reload: 0, reloadEmpty: 0, shell: { start: 0.42, per: 0.52, end: 0.34 }, cycle: 0.62,
-    spread: 0.068, adsSpread: 0.052, moveSpread: 0.015, recoil: 0.085, hRecoil: 0.02, pellets: 9,
-    range: 35, fs: 7, fe: 20, minMul: 0.2, moveMul: 0.93, chamber: false, draw: 0.55, adsFov: 0.8,
+    spread: 0.052, adsSpread: 0.034, moveSpread: 0.012, recoil: 0.085, hRecoil: 0.02, pellets: 9,
+    range: 42, fs: 10, fe: 34, minMul: 0.45, moveMul: 0.93, chamber: false, draw: 0.55, adsFov: 0.8,
   },
   rifle: {
     label: 'AK-47 PİYADE TÜFEĞİ', short: 'AK-47', slot: 'primary', cls: 'rifle', dmg: 34, head: 2.4, rpm: 600, modes: ['auto', 'semi'], mag: 30, reserve: 60, maxReserve: 180,
-    reload: 2.5, reloadEmpty: 2.95, spread: 0.03, adsSpread: 0.005, moveSpread: 0.035, recoil: 0.034, hRecoil: 0.017, pellets: 1,
+    reload: 2.5, reloadEmpty: 2.95, spread: 0.025, adsSpread: 0.0028, moveSpread: 0.014, recoil: 0.034, hRecoil: 0.017, pellets: 1,
     range: 95, fs: 18, fe: 55, minMul: 0.62, moveMul: 0.92, chamber: true, draw: 0.55, adsFov: 0.72,
   },
   m4: {
     label: 'M4A1 KARABİNA', short: 'M4A1', slot: 'primary', cls: 'm4', dmg: 27, head: 2.3, rpm: 780, modes: ['auto', 'burst', 'semi'], mag: 30, reserve: 60, maxReserve: 180,
-    reload: 2.3, reloadEmpty: 2.7, spread: 0.027, adsSpread: 0.0035, moveSpread: 0.03, recoil: 0.022, hRecoil: 0.01, pellets: 1,
+    reload: 2.3, reloadEmpty: 2.7, spread: 0.022, adsSpread: 0.002, moveSpread: 0.012, recoil: 0.022, hRecoil: 0.01, pellets: 1,
     range: 90, fs: 20, fe: 60, minMul: 0.65, moveMul: 0.94, chamber: true, draw: 0.5, adsFov: 0.64,
   },
   sniper: {
-    label: 'R700 KESKİN NİŞANCI', short: 'R700', slot: 'primary', cls: 'bolt', dmg: 105, head: 2.5, rpm: 60, modes: ['bolt'], mag: 5, reserve: 10, maxReserve: 25,
+    label: 'AWP KESKİN NİŞANCI', short: 'AWP', slot: 'primary', cls: 'bolt', dmg: 250, head: 2.5, rpm: 60, modes: ['bolt'], mag: 5, reserve: 10, maxReserve: 25,
     reload: 2.9, reloadEmpty: 3.2, cycle: 0.95, spread: 0.07, adsSpread: 0.0004, moveSpread: 0.05, recoil: 0.1, hRecoil: 0.012, pellets: 1,
-    range: 160, fs: 60, fe: 130, minMul: 0.85, moveMul: 0.88, chamber: false, scope: true, draw: 0.65, adsFov: 0.2,
+    // Even a suppressed max-range torso hit exceeds 100 HP plus a full 100-point plate.
+    range: 160, fs: 60, fe: 130, minMul: 0.9, moveMul: 0.88, chamber: false, scope: true, draw: 0.65, adsFov: 0.2,
   },
   knife: {
     label: 'M9 SÜNGÜ', short: 'M9', slot: 'melee', cls: 'knife', melee: true, modes: ['melee'], dmg: 45, heavy: 80, backLight: 100, backHeavy: 200,

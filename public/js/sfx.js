@@ -92,8 +92,8 @@ function partials(sec, list, a = 0.0004) {
   return x;
 }
 function add(dst, src, at = 0, g = 1) {
-  const o = Math.round(at * SR), n = Math.min(src.length, dst.length - o);
-  for (let i = 0; i < n; i++) dst[o + i] += src[i] * g;
+  const o = Math.round(at * SR), start = Math.max(0, -o), n = Math.min(src.length, dst.length - o);
+  for (let i = start; i < n; i++) dst[o + i] += src[i] * g;
   return dst;
 }
 function gain(x, g) { for (let i = 0; i < x.length; i++) x[i] *= g; return x; }
@@ -102,6 +102,25 @@ function peakOf(x) { let p = 0; for (let i = 0; i < x.length; i++) { const v = M
 function norm(x, peak = 0.95) { const p = peakOf(x); return p > 1e-9 ? gain(x, peak / p) : x; }
 function fadeOut(x, sec = 0.01) { const n = Math.min(x.length, len(sec)); for (let i = 0; i < n; i++) x[x.length - 1 - i] *= i / n; return x; }
 function trim(x, floor = 0.0004) { let e = x.length - 1; while (e > 64 && Math.abs(x[e]) < floor) e--; return fadeOut(x.slice(0, Math.min(x.length, e + len(0.01))), 0.006); }
+function finishChannels(chs, peak) {
+  let p = 0, end = 64;
+  for (const x of chs) {
+    hp(x, 24, 0.707);
+    for (let i = 0; i < x.length; i++) {
+      const a = Math.abs(x[i]);
+      if (!Number.isFinite(a)) throw new Error('Non-finite synthesized sample');
+      p = Math.max(p, a);
+      if (a > 0.0001) end = Math.max(end, i);
+    }
+  }
+  const g = p > peak ? peak / p : 1, n = Math.min(chs[0].length, end + len(0.012));
+  return chs.map((x) => {
+    gain(x, g);
+    const out = x.length === n ? x : x.slice(0, n);
+    for (let i = 0, a = len(0.0003); i < Math.min(a, out.length); i++) out[i] *= i / a;
+    return fadeOut(out, 0.012);
+  });
+}
 // short pressure pulse: positive half sine then a longer negative lobe (muzzle blast "punch")
 function pulse(T, amp = 1) {
   const x = mk(T * 3.2), n1 = len(T);
@@ -134,7 +153,7 @@ function reflect(x, amt = 1, lpF = 3200, extra = 0.1) {
 const mono = ([l, r]) => { const x = new Float32Array(l.length); for (let i = 0; i < l.length; i++) x[i] = (l[i] + r[i]) * 0.5; return x; };
 
 // small Freeverb-style reverb (mono in, stereo out) for baked distant tails
-function reverb(x, { room = 0.84, damp = 0.35, wet = 0.5, dry = 1, tail = 1.2 } = {}) {
+function reverb(x, { room = 0.74, damp = 0.6, wet = 0.3, dry = 1, tail = 0.65 } = {}) {
   const n = x.length + len(tail), sc = SR / 44100;
   const combs = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617], aps = [556, 441, 341, 225];
   const out = [new Float32Array(n), new Float32Array(n)];
@@ -162,75 +181,68 @@ function reverb(x, { room = 0.84, damp = 0.35, wet = 0.5, dry = 1, tail = 1.2 } 
 }
 
 // ------------------------------------------------------------------ firearms
-// imp: muzzle blast impulse, pT: pressure pulse width scale, crack: supersonic crack (heard downrange)
-// body*: filtered-noise blast, mid*: resonant body, boom*: low thump, ring: metal, mech: action cycling (first person)
+// Each weapon has its own blast bandwidth, pressure lobe, receiver resonance and action timing.
+// The sniper is the AWP: a broad .338 pressure report, not a pitched bass drum or an auto-cycling bolt.
 const GUNS = {
-  pistol: { len: 0.5, imp: 0.8, pT: 1, crack: 0.35, bodyF: [7200, 1400], bodyT: 0.034, bodyTau: 0.03, midF: 720, midQ: 1.4, midA: 0.55, midT: 0.03, boomF: [170, 58], boomA: 0.55, boomT: 0.055, boomTau: 0.03, drive: 2.6, ring: [[2900, 0.05, 0.02]], mech: [[0.014, 3300, 0.32], [0.034, 2500, 0.26]] },
-  revolver: { len: 0.7, imp: 1.0, pT: 1.3, crack: 0.65, bodyF: [6500, 1000], bodyT: 0.06, bodyTau: 0.05, midF: 520, midQ: 1.3, midA: 0.75, midT: 0.06, boomF: [140, 44], boomA: 0.95, boomT: 0.1, boomTau: 0.04, drive: 3.2, ring: [[1850, 0.09, 0.07], [3150, 0.05, 0.045]], mech: [[0.03, 4100, 0.14]] },
-  smg: { len: 0.42, imp: 0.65, pT: 0.9, crack: 0.3, bodyF: [6200, 1500], bodyT: 0.027, bodyTau: 0.025, midF: 950, midQ: 1.5, midA: 0.42, midT: 0.02, boomF: [155, 62], boomA: 0.45, boomT: 0.045, boomTau: 0.025, drive: 2.1, ring: null, mech: [[0.011, 3900, 0.22], [0.027, 3000, 0.18]] },
-  shotgun: { len: 0.85, imp: 1.1, pT: 1.8, crack: 0.15, bodyF: [5000, 420], bodyT: 0.11, bodyTau: 0.07, midF: 320, midQ: 1.0, midA: 0.85, midT: 0.09, boomF: [118, 36], boomA: 1.35, boomT: 0.16, boomTau: 0.06, drive: 3.4, ring: null, mech: null },
-  rifle: { len: 0.65, imp: 1.0, pT: 1.3, crack: 0.9, bodyF: [9000, 1150], bodyT: 0.05, bodyTau: 0.04, midF: 590, midQ: 1.2, midA: 0.62, midT: 0.045, boomF: [138, 44], boomA: 1.0, boomT: 0.09, boomTau: 0.035, drive: 3.1, ring: [[2350, 0.045, 0.03]], mech: [[0.021, 2350, 0.36], [0.049, 1850, 0.3]] },
-  m4: { len: 0.6, imp: 1.0, pT: 1.1, crack: 1.0, bodyF: [11500, 1650], bodyT: 0.04, bodyTau: 0.035, midF: 820, midQ: 1.4, midA: 0.5, midT: 0.035, boomF: [160, 55], boomA: 0.82, boomT: 0.07, boomTau: 0.03, drive: 2.9, ring: [[3300, 0.04, 0.025]], mech: [[0.017, 3500, 0.3], [0.039, 2800, 0.25]], spring: true },
-  sniper: { len: 1.0, imp: 1.25, pT: 1.6, crack: 1.25, bodyF: [9500, 900], bodyT: 0.085, bodyTau: 0.06, midF: 440, midQ: 1.1, midA: 0.85, midT: 0.08, boomF: [120, 34], boomA: 1.45, boomT: 0.18, boomTau: 0.05, drive: 3.6, ring: [[1650, 0.05, 0.06]], mech: null },
+  pistol: { len: 0.32, imp: 0.78, pT: 0.9, crack: 0.25, bodyF: [6600, 1700], bodyT: 0.026, bodyTau: 0.022, midF: 780, midQ: 0.9, midA: 0.48, midT: 0.023, boomF: [180, 82], boomA: 0.34, boomT: 0.032, boomTau: 0.016, drive: 1.35, ring: [[3100, 0.035, 0.016]], mech: [[0.013, 3100, 0.21], [0.039, 2300, 0.17]] },
+  revolver: { len: 0.44, imp: 1.05, pT: 1.25, crack: 0.5, bodyF: [6000, 1050], bodyT: 0.049, bodyTau: 0.036, midF: 560, midQ: 0.85, midA: 0.75, midT: 0.041, boomF: [158, 63], boomA: 0.48, boomT: 0.064, boomTau: 0.022, drive: 1.55, ring: [[1900, 0.055, 0.04], [3250, 0.025, 0.025]], mech: [[0.002, 3900, 0.09]] },
+  smg: { len: 0.24, imp: 0.62, pT: 0.8, crack: 0.22, bodyF: [5800, 1700], bodyT: 0.021, bodyTau: 0.018, midF: 1050, midQ: 0.95, midA: 0.38, midT: 0.016, boomF: [178, 95], boomA: 0.25, boomT: 0.024, boomTau: 0.012, drive: 1.25, ring: null, mech: [[0.011, 3500, 0.22], [0.034, 2650, 0.19]] },
+  shotgun: { len: 0.58, imp: 1.08, pT: 1.7, crack: 0.12, bodyF: [5100, 600], bodyT: 0.075, bodyTau: 0.048, midF: 370, midQ: 0.8, midA: 0.88, midT: 0.062, boomF: [135, 50], boomA: 0.68, boomT: 0.094, boomTau: 0.032, drive: 1.65, ring: [[1280, 0.025, 0.033]], mech: null },
+  rifle: { len: 0.37, imp: 1.0, pT: 1.18, crack: 0.85, bodyF: [8600, 1300], bodyT: 0.039, bodyTau: 0.029, midF: 630, midQ: 0.9, midA: 0.66, midT: 0.031, boomF: [164, 65], boomA: 0.46, boomT: 0.047, boomTau: 0.019, drive: 1.5, ring: [[2450, 0.032, 0.021]], mech: [[0.022, 2250, 0.24], [0.058, 1700, 0.19]] },
+  m4: { len: 0.33, imp: 0.95, pT: 1.0, crack: 0.98, bodyF: [10500, 1900], bodyT: 0.032, bodyTau: 0.024, midF: 870, midQ: 0.95, midA: 0.48, midT: 0.025, boomF: [190, 82], boomA: 0.37, boomT: 0.036, boomTau: 0.016, drive: 1.4, ring: [[3450, 0.026, 0.018]], mech: [[0.018, 3300, 0.2], [0.046, 2600, 0.17]], spring: true },
+  sniper: { len: 0.66, imp: 1.3, pT: 1.65, crack: 1.18, bodyF: [9400, 950], bodyT: 0.074, bodyTau: 0.047, midF: 470, midQ: 0.85, midA: 0.94, midT: 0.062, boomF: [144, 47], boomA: 0.75, boomT: 0.105, boomTau: 0.03, drive: 1.75, ring: [[1720, 0.035, 0.044], [2870, 0.018, 0.025]], mech: [[0.001, 2150, 0.1]] },
 };
 
 function gunCore(P, mode) {
-  const far = mode === 'far', L = far ? 1.1 : P.len;
-  const x = mk(L);
+  const far = mode === 'far', x = mk(P.len + (far ? 0.08 : 0));
   if (!far) {
-    add(x, hp(env(noise(0.014), 0.0001, 0.0022), 300), 0, P.imp * 1.4);
-    add(x, pulse(0.0021 * P.pT), 0, P.imp);
-    if (mode === 'near' && P.crack) add(x, hp(nwave(0.0007), 900), 0, P.crack * 1.2);
+    add(x, hp(env(noise(0.011), 0.00025, 0.0019), 520), 0, P.imp * 1.05);
+    add(x, hp(pulse(0.0018 * P.pT), 45), 0.0003, P.imp * 0.85);
+    if (mode === 'near' && P.crack) add(x, hp(nwave(0.0006), 1100), 0.0007, P.crack * 0.5);
   }
-  const f0 = far ? P.bodyF[0] * 0.18 : P.bodyF[0] * rr(0.93, 1.07), f1 = far ? P.bodyF[1] * 0.55 : P.bodyF[1];
-  const bt = P.bodyT * (far ? 2.2 : rr(0.9, 1.1));
-  const b = env(noise(Math.min(L, bt * 9)), 0.0004, bt);
-  lp(b, expSweep(f0, f1, P.bodyTau), 0.85); lp(b, expSweep(f0 * 1.3, f1, P.bodyTau), 0.6);
-  add(x, b, 0, 1.3);
-  const m = env(noise(Math.min(L, P.midT * 8)), 0.0005, P.midT * (far ? 1.8 : 1));
-  bp(m, P.midF * rr(0.95, 1.05), P.midQ);
-  add(x, m, 0, P.midA * 2.6);
-  const boomT = P.boomT * (far ? 2.3 : 1);
-  add(x, tone(Math.min(L, boomT * 7), P.boomF[0] * rr(0.95, 1.05), P.boomF[1], P.boomTau, 0.0012, boomT), 0, P.boomA * (mode === 'fp' ? 1.2 : far ? 1.4 : 0.9));
-  if (P.ring && !far) add(x, partials(0.3, P.ring), 0.0005);
-  drive(x, P.drive * (far ? 0.6 : 1));
-  return norm(x, 0.95);
+  const bodyT = P.bodyT * (far ? 1.35 : rr(0.94, 1.06));
+  const body = env(noise(Math.min(x.length / SR, bodyT * 8)), 0.0006, bodyT);
+  lp(body, expSweep(P.bodyF[0] * (far ? 0.25 : rr(0.96, 1.04)), P.bodyF[1] * (far ? 0.65 : 1), P.bodyTau), 0.7);
+  hp(body, far ? 65 : 100);
+  add(x, body, 0.001, 1.2);
+  add(x, burst(P.midT * 7, 'bp', P.midF * rr(0.97, 1.03), P.midQ, 0.0008, P.midT * (far ? 1.25 : 1), P.midA * 2.4), 0.0015);
+  add(x, burst(P.boomT * 6, 'lp', P.boomF[0] * 1.6, 0.8, 0.001, P.boomT, P.boomA * 2), 0.001);
+  add(x, tone(P.boomT * 6, P.boomF[0], P.boomF[1], P.boomTau, 0.0015, P.boomT), 0.0008, P.boomA * 0.28);
+  const tail = burst(P.len * 0.75, 'bp', far ? 650 : 1800, 0.6, 0.006, P.bodyT * 1.45, 0.15);
+  add(x, tail, 0.018);
+  if (P.ring && !far) add(x, partials(0.22, P.ring), 0.001);
+  return norm(drive(x, P.drive * (far ? 0.8 : 1)), 0.82);
 }
 
 function gunshot(type, mode) {
-  const P = GUNS[type];
-  const core = gunCore(P, mode);
+  const P = GUNS[type], core = gunCore(P, mode);
   if (mode === 'fp') {
-    const [L, R] = reflect(core, 0.95, 3400, 0.1);
-    // diffuse glue: dense very early reverb so the shot does not sound "dry" before the convolver tail
-    const glue = lp(env(noise(0.25), 0.002, 0.05), 2400);
-    add(L, glue, 0.006, 0.12); add(R, glue.reverse(), 0.006, 0.12);
-    if (P.mech) for (const [t, f, a] of P.mech) { const c = click(f * rr(0.95, 1.05), a, 0.009); add(L, c, t, 0.75); add(R, c, t, 1); }
-    if (P.spring) { const s = partials(0.12, [[1150, 0.05, 0.04], [1720, 0.03, 0.03]]); add(L, s, 0.03); add(R, s, 0.03); }
-    return [trim(norm(L, 0.95)), trim(norm(R, 0.95))];
+    const left = core, right = core.slice();
+    if (P.mech) for (const [t, f, a] of P.mech) {
+      const c = click(f * rr(0.97, 1.03), a, 0.005, 1.6);
+      add(left, c, t, 0.8); add(right, c, t, 1);
+    }
+    if (P.spring) {
+      const spring = partials(0.075, [[1090, 0.018, 0.021], [1640, 0.009, 0.016]]);
+      add(left, spring, 0.028, 0.75); add(right, spring, 0.028);
+    }
+    return [left, right];
   }
-  if (mode === 'near') return trim(norm(mono(reflect(core, 0.7, 3000, 0.09)), 0.95));
-  const f = lp(lp(core, 1400, 0.7), 900, 0.7);
-  const [a, b] = reverb(f, { room: 0.87, damp: 0.5, wet: 1.3, dry: 0.55, tail: 1.3 });
-  return trim(norm(mono([a, b]), 0.8));
+  // Remote reports stay mono for the HRTF. Room response is added only by the short shared IR.
+  return mode === 'far' ? gain(lp(core, 1900, 0.7), 0.83) : core;
 }
 
 // suppressed: the muzzle blast is trapped in the baffles, what is left is a dull "thup", the action
 // cycling and (for rifles) the supersonic crack downrange
 function supshot(type, fp) {
-  const P = GUNS[type];
-  const x = mk(fp ? 0.45 : 0.35);
-  const b = env(noise(0.2), 0.0006, P.bodyT * 0.9);
-  lp(b, expSweep(P.bodyF[0] * 0.28, P.bodyF[1] * 0.45, P.bodyTau), 0.8); lp(b, 2600, 0.7);
-  add(x, b, 0, 1.2);
-  add(x, bp(env(noise(0.08), 0.0004, 0.012), 1500 * rr(0.9, 1.1), 1.2), 0, 0.5);
-  add(x, tone(0.15, P.boomF[0] * 0.9, P.boomF[1], P.boomTau, 0.0015, P.boomT * 0.6), 0, P.boomA * 0.55);
-  if (!fp && P.crack > 0.6) add(x, hp(nwave(0.0007), 900), 0.002, P.crack * 0.55);
-  const mech = P.mech || [[0.02, 2600, 0.3]];
-  for (const [t, f, a] of mech) add(x, click(f * rr(0.95, 1.05), a * (fp ? 2.2 : 1.2), 0.01), t * 0.8);
-  drive(x, 1.6);
-  if (fp) { const [L, Rr] = reflect(norm(x, 0.9), 0.7, 3000, 0.08); return [trim(norm(L, 0.9)), trim(norm(Rr, 0.9))]; }
-  return trim(norm(mono(reflect(x, 0.6, 2800, 0.08)), 0.9));
+  const P = GUNS[type], x = mk(Math.min(0.42, P.len));
+  add(x, burst(0.18, 'lp', expSweep(P.bodyF[0] * 0.22, P.bodyF[1] * 0.55, P.bodyTau), 0.75, 0.0008, P.bodyT * 0.72, 1.1));
+  add(x, hp(pulse(0.002 * P.pT), 65), 0, 0.35);
+  add(x, burst(0.065, 'bp', 1300 * rr(0.95, 1.05), 0.8, 0.0006, 0.012, 0.28));
+  add(x, burst(0.16, 'lp', P.boomF[0] * 1.3, 0.8, 0.0015, P.boomT * 0.55, P.boomA * 0.8));
+  if (!fp && P.crack > 0.6) add(x, hp(nwave(0.0006), 1200), 0.002, P.crack * 0.45);
+  if (P.mech) for (const [t, f, a] of P.mech) add(x, click(f * rr(0.97, 1.03), a * (fp ? 1.6 : 0.8), 0.006, 1.6), t);
+  return norm(drive(x, 1.2), fp ? 0.7 : 0.64);
 }
 
 // ------------------------------------------------------------------ recipes
@@ -274,7 +286,7 @@ function explosion(far) {
   const sub = env(noise(2.5), 0.01, far ? 1.2 : 0.9); lp(sub, 90, 0.8); lp(sub, 90, 0.8); add(x, sub, 0, 3);
   if (!far) for (let i = 0; i < 46; i++) { const t = 0.12 + Math.pow(rnd(), 1.6) * 1.8; add(x, click(rr(1800, 5200), rr(0.05, 0.25) * (1.9 - t) / 1.9, rr(0.004, 0.012)), t); }
   drive(x, far ? 1.8 : 3.8);
-  const [a, c] = far ? reverb(lp(x, 500, 0.7), { room: 0.9, damp: 0.55, wet: 1.4, dry: 0.5, tail: 1.5 }) : reflect(norm(x), 0.9, 2600, 0.1);
+  const [a, c] = far ? reverb(lp(x, 500, 0.7), { room: 0.74, damp: 0.63, wet: 0.6, dry: 0.85, tail: 0.65 }) : reflect(norm(x), 0.9, 2600, 0.1);
   if (far) return trim(norm(mono([a, c]), 0.8));
   return [trim(norm(a, 0.97)), trim(norm(c, 0.97))];
 }
@@ -309,22 +321,47 @@ R.whiz = () => {
   return trim(norm(x, 0.9));
 };
 
-// movement
-function step(run) {
-  const x = mk(0.3);
-  const heel = run ? 1.3 : 1;
-  add(x, burst(0.15, 'lp', rr(280, 420), 0.8, 0.004, run ? 0.035 : 0.028, heel));
-  add(x, tone(0.1, 80, 60, 0.03, 0.002, 0.025), 0, 0.35);
-  if (run) add(x, burst(0.1, 'lp', 400, 0.8, 0.003, 0.02, 0.7), rr(0.028, 0.04));
-  add(x, burst(0.1, 'bp', rr(1500, 2400), 0.8, 0.01, 0.025, run ? 0.35 : 0.22), 0.012);
-  if (rnd() < 0.5) { const sq = env(noise(0.1), 0.01, 0.03); bp(sq, (t) => 1300 - t * 3000, 6); add(x, sq, 0.02, 0.5); }
-  return trim(norm(x, 0.85));
+// movement: paired even/odd variants describe left/right heel -> sole -> toe contact.
+function gear() {
+  const x = mk(0.22);
+  add(x, bell(bp(noise(rr(0.12, 0.19)), rr(950, 1500), 0.65), 0.35, 2), 0, 0.28);
+  add(x, bell(hp(lp(noise(0.12), 3900), 1900), 0.45, 3), 0.015, 0.06);
+  for (let i = 0; i < 2; i++) add(x, click(rr(1600, 2500), 0.024, 0.003, 1.2), rr(0.025, 0.1));
+  return trim(norm(x, 0.3 * rr(0.85, 1)));
 }
-R.st_walk = () => step(false);
-R.st_run = () => step(true);
-R.st_land = () => { const x = mk(0.4); add(x, burst(0.2, 'lp', 300, 0.8, 0.003, 0.05, 1.5)); add(x, tone(0.2, 70, 45, 0.05, 0.002, 0.06), 0, 0.8); add(x, R.gear(), 0.02, 0.6); return trim(norm(x, 0.9)); };
-R.gear = () => { const x = mk(0.3); add(x, bell(bp(noise(0.2), rr(2200, 4200), 0.7), 0.4, 2), 0, 0.6); if (rnd() < 0.7) for (let i = 0; i < 3; i++) add(x, partials(0.05, [[rr(4000, 7000), 0.3, 0.012]]), rr(0, 0.12)); return trim(norm(x, 0.6)); };
-R.cloth = () => { const x = bell(bp(noise(rr(0.14, 0.22)), rr(1800, 3200), 0.7), 0.35, 2); return trim(norm(x, 0.6)); };
+function step(run, surface = 'carpet', foot = 0, crouch = false) {
+  const concrete = surface === 'concrete', x = mk(run ? 0.25 : 0.3);
+  const heel = (foot & 1) ? 0.92 : 1.04, toe = run ? rr(0.033, 0.046) : rr(0.052, 0.073);
+  const weight = crouch ? 0.45 : run ? 1.18 : 1;
+  add(x, burst(0.12, 'lp', rr(concrete ? 580 : 340, concrete ? 760 : 470) * heel, 0.7, 0.0018, run ? 0.019 : 0.027, weight));
+  add(x, burst(0.09, 'bp', rr(150, 225) * heel, 0.7, 0.003, 0.023, weight * 0.55), 0.004);
+  add(x, burst(0.13, 'bp', rr(concrete ? 1600 : 700, concrete ? 2400 : 1150), 0.65, 0.003, run ? 0.018 : 0.029, concrete ? 0.5 : 0.26), 0.006);
+  add(x, burst(0.11, 'lp', concrete ? 1050 : 520, 0.7, 0.002, 0.02, weight * 0.48), toe);
+  const scuff = bell(bp(noise(run ? 0.07 : 0.11), concrete ? rr(2400, 3300) : rr(1150, 1750), 0.65), 0.32, 2);
+  add(x, scuff, toe * 0.55, (concrete ? 0.24 : 0.16) * (crouch ? 0.55 : 1));
+  if (concrete) add(x, click(rr(2100, 2900), 0.08, 0.0025, 0.8), 0.001);
+  add(x, gear(), run ? 0.04 : 0.06, crouch ? 0.04 : run ? 0.14 : 0.08);
+  hp(x, 48);
+  return trim(norm(x, (crouch ? 0.48 : run ? 0.78 : 0.68) * rr(0.91, 1)));
+}
+function land(surface) {
+  const x = mk(0.4);
+  add(x, step(true, surface, 0), 0, 0.82);
+  add(x, step(true, surface, 1), rr(0.014, 0.029), 0.7);
+  add(x, burst(0.2, 'lp', 290, 0.7, 0.003, 0.047, 0.8));
+  add(x, gear(), 0.045, 0.22);
+  return trim(norm(x, 0.84));
+}
+R.st_walk = (v) => step(false, 'carpet', v);
+R.st_run = (v) => step(true, 'carpet', v);
+R.st_crouch = (v) => step(false, 'carpet', v, true);
+R.st_land = () => land('carpet');
+R.st_walk_concrete = (v) => step(false, 'concrete', v);
+R.st_run_concrete = (v) => step(true, 'concrete', v);
+R.st_crouch_concrete = (v) => step(false, 'concrete', v, true);
+R.st_land_concrete = () => land('concrete');
+R.gear = gear;
+R.cloth = () => { const x = bell(bp(noise(rr(0.14, 0.22)), rr(1000, 1800), 0.7), 0.35, 2); return trim(norm(x, 0.32)); };
 
 // brass / hulls on the damp carpet
 R.sh_brass = () => { const x = mk(0.15); add(x, click(rr(3800, 5200), 0.7, 0.005)); add(x, burst(0.03, 'lp', 700, 0.7, 0.0003, 0.006, 0.6)); add(x, click(rr(4200, 5600), 0.25, 0.004), rr(0.05, 0.08)); return trim(norm(x, 0.6)); };
@@ -350,10 +387,10 @@ R.rv_open = () => seq(0.35, [[0, click(3200, 0.8, 0.006)], [0.04, partials(0.2, 
 R.rv_eject = () => { const x = mk(0.6); add(x, click(2800, 0.8, 0.008)); for (let i = 0; i < 6; i++) add(x, partials(0.08, [[rr(3500, 5200), 0.3, 0.02], [rr(6000, 7500), 0.15, 0.012]]), rr(0.05, 0.4)); return trim(norm(x, 0.8)); };
 R.rv_load = () => seq(0.35, [[0, slideN(0.1, 2000, 1.5, 0.01, 0.03, 0.6)], [0.08, click(3000, 0.6, 0.006)], [0.1, click(3400, 0.5, 0.005)], [0.13, click(2800, 0.7, 0.007)]]);
 R.rv_close = () => seq(0.3, [[0, click(2400, 1, 0.01)], [0, partials(0.15, [[1800, 0.3, 0.04]])], [0.07, click(3800, 0.3, 0.004)], [0.1, click(3800, 0.3, 0.004)]]);
-R.bolt_up = () => seq(0.15, [[0, click(2600, 0.7, 0.006)], [0.004, partials(0.08, [[3200, 0.15, 0.02]])]]);
-R.bolt_back = () => seq(0.25, [[0, slideN(0.14, 1900, 2, 0.01, 0.05, 0.8)], [0.1, click(2200, 0.9, 0.008)]]);
-R.bolt_fwd = () => seq(0.25, [[0, slideN(0.12, 2100, 2, 0.01, 0.04, 0.8)], [0.085, click(2500, 1, 0.01)], [0.085, burst(0.04, 'lp', 900, 0.7, 0.0005, 0.01, 0.5)]]);
-R.bolt_down = () => seq(0.15, [[0, click(2800, 0.9, 0.007)], [0, burst(0.04, 'lp', 700, 0.7, 0.0005, 0.01, 0.6)]]);
+R.bolt_up = () => seq(0.17, [[0, click(1850, 0.55, 0.004, 1.6)], [0.014, slideN(0.07, 1250, 0.8, 0.004, 0.017, 0.45)], [0.042, partials(0.07, [[2450, 0.08, 0.018], [3600, 0.04, 0.011]])]]);
+R.bolt_back = () => seq(0.26, [[0, slideN(0.14, 1450, 0.9, 0.008, 0.036, 0.65)], [0.018, burst(0.1, 'lp', 480, 0.8, 0.004, 0.03, 0.38)], [0.112, click(2100, 0.58, 0.005, 1.5)], [0.126, partials(0.09, [[1280, 0.09, 0.026]])]]);
+R.bolt_fwd = () => seq(0.25, [[0, slideN(0.12, 1750, 1, 0.006, 0.03, 0.6)], [0.036, slideN(0.08, 2950, 0.7, 0.004, 0.015, 0.16)], [0.093, click(2150, 0.78, 0.006, 1.4)], [0.093, burst(0.06, 'lp', 650, 0.7, 0.0008, 0.012, 0.58)]]);
+R.bolt_down = () => seq(0.17, [[0, slideN(0.06, 1500, 0.9, 0.004, 0.015, 0.34)], [0.026, click(2500, 0.7, 0.004, 1.5)], [0.027, burst(0.05, 'lp', 540, 0.7, 0.001, 0.012, 0.65)], [0.03, partials(0.08, [[1660, 0.1, 0.026], [2770, 0.06, 0.015]])]]);
 R.dry = () => seq(0.12, [[0, click(3800, 0.8, 0.005)], [0, burst(0.03, 'lp', 800, 0.7, 0.0003, 0.006, 0.4)]]);
 R.mode = () => seq(0.12, [[0, click(4200, 0.8, 0.004)], [0.03, click(3000, 0.6, 0.004)]]);
 R.deploy_light = () => seq(0.3, [[0, R.cloth(), 0.7], [0.06, click(3000, 0.7, 0.006)]]);
@@ -422,11 +459,11 @@ R.vend_hum = () => { const x = mk(2); for (let i = 0; i < x.length; i++) { const
 R.hurt = () => { const x = mk(0.35); add(x, tone(0.3, 85, 38, 0.06, 0.002, 0.1), 0, 1); add(x, burst(0.1, 'lp', 700, 0.7, 0.001, 0.035, 0.7)); add(x, burst(0.05, 'bp', 1600, 1.5, 0.0003, 0.01, 0.35)); return trim(norm(drive(x, 1.6), 0.9)); };
 R.hurt_head = () => { const x = mk(0.5); add(x, R.hurt(), 0, 1); add(x, partials(0.4, [[2200, 0.15, 0.2], [3300, 0.1, 0.15]]), 0.01); return trim(norm(x, 0.9)); };
 R.heart = () => { const x = mk(0.45); add(x, tone(0.2, 60, 45, 0.05, 0.004, 0.05), 0, 1); add(x, burst(0.06, 'lp', 150, 0.7, 0.003, 0.02, 0.5)); add(x, tone(0.2, 52, 40, 0.05, 0.004, 0.045), 0.19, 0.7); return trim(norm(x, 0.8)); };
-R.breath = () => { const x = noise(rr(0.5, 0.65)); bp(x, rr(900, 1200), 0.6); bell(x, 0.35, 2); add(x, bell(bp(noise(0.55), 400, 0.8), 0.4, 2), 0, 0.3); return trim(norm(x, 0.5)); };
+R.breath = () => { const x = noise(rr(0.45, 0.58)); bp(x, rr(500, 700), 0.65); lp(x, 1550); bell(x, 0.35, 2); add(x, bell(bp(noise(0.45), 280, 0.8), 0.4, 2), 0, 0.18); return trim(norm(x, 0.15)); };
 R.death = () => { const x = mk(1.2); add(x, R.hurt(), 0, 1); add(x, burst(1.1, 'lp', 300, 0.7, 0.2, 0.3, 0.4), 0.1); return trim(norm(x, 0.8)); };
 
 // distant level ambience (baked with reverb so they sound far away and around corners)
-const farify = (x, wet = 1.3) => { lp(x, 1200, 0.7); return trim(norm(mono(reverb(x, { room: 0.88, damp: 0.5, wet, dry: 0.3, tail: 1.8 })), 0.7)); };
+const farify = (x, wet = 1.3) => { lp(x, 1200, 0.7); return trim(norm(mono(reverb(x, { room: 0.72, damp: 0.62, wet: wet * 0.35, dry: 0.7, tail: 0.6 })), 0.7)); };
 R.amb_thud = () => { const x = mk(0.8); add(x, tone(0.7, 62, 30, 0.2, 0.01, 0.35)); add(x, burst(0.5, 'lp', 300, 0.7, 0.005, 0.2, 0.7)); return farify(x); };
 R.amb_creak = () => { const x = noise(1.3); bp(x, (t) => 320 + 200 * t, 9); env(x, 0.2, 0.5, 0.3); for (let i = 0; i < x.length; i++) x[i] *= 0.55 + 0.45 * Math.sin(i / SR * 2 * Math.PI * (13 + 3 * Math.sin(i / SR * 3))); return farify(x, 1); };
 R.amb_steps = () => { const x = mk(2); for (let i = 0; i < 5; i++) add(x, step(false), i * 0.42 + rr(-0.03, 0.03), 0.8); return farify(x, 1.1); };
@@ -435,30 +472,49 @@ R.amb_drone = () => { const x = mk(3.2); let ph = 0; for (let i = 0; i < x.lengt
 R.amb_pop = () => { const x = mk(0.6); add(x, click(2000, 1, 0.01)); const b = noise(0.4); bp(b, 1900, 2); env(b, 0.002, 0.08); for (let i = 0; i < b.length; i++) b[i] *= Math.sin(i / SR * 2 * Math.PI * 120) > 0 ? 1 : 0.2; add(x, b, 0.01, 0.8); return farify(x, 0.8); };
 R.amb_scream = () => { const x = mk(1.6); let ph = 0; for (let i = 0; i < x.length; i++) { const t = i / SR; ph += (420 + 60 * Math.sin(t * 7) - 120 * t) / SR; x[i] = Math.sin(2 * Math.PI * ph) * Math.sin(Math.PI * t / 1.6) ** 2; } add(x, bell(bp(noise(1.6), 1500, 2), 0.3), 0, 0.3); return farify(x, 1.4); };
 
-// convolver IR: carpeted low-ceiling labyrinth. Highs decay faster than lows.
-R.ir = () => {
-  const T = 1.9, out = [];
+// Wet-only room IRs: discrete early reflections, then a low-energy, high-frequency-damped late field.
+// Energy normalization (not peak normalization) keeps convolution level independent of sample rate.
+function roomIR(layout) {
+  const arena = layout === 'arena', escape = layout === 'escape';
+  const duration = arena ? 0.85 : escape ? 0.5 : 0.65, decay = arena ? 0.68 : escape ? 0.32 : 0.44;
+  const out = [];
   for (let c = 0; c < 2; c++) {
-    const x = noise(T);
-    for (let i = 0; i < x.length; i++) { const t = i / SR; x[i] *= t < 0.012 ? 0 : Math.exp(-(t - 0.012) / 0.26) * (t < 0.02 ? (t - 0.012) / 0.008 : 1); }
-    lp(x, expSweep(7000, 900, 0.35), 0.7);
-    out.push(norm(x, 0.5));
+    const x = noise(duration), onset = arena ? 0.038 : 0.026;
+    lp(x, expSweep(arena ? 5100 : 3400, 700, decay * 0.35), 0.7); hp(x, 130);
+    let energy = 0;
+    for (let i = 0; i < x.length; i++) {
+      const t = i / SR - onset;
+      x[i] *= t < 0 ? 0 : Math.min(1, t / 0.018) * Math.exp(-6.9078 * t / decay);
+      energy += x[i] * x[i];
+    }
+    gain(x, (arena ? 0.18 : escape ? 0.085 : 0.12) / Math.sqrt(energy));
+    const reflection = mk(0.006); reflection[0] = 1;
+    lp(reflection, arena ? 4800 : 3100, 0.65); hp(reflection, 160);
+    let tapEnergy = 0; for (const v of reflection) tapEnergy += v * v;
+    gain(reflection, 1 / Math.sqrt(tapEnergy));
+    const taps = c ? [[0.010, 0.22], [0.020, 0.14], [0.033, 0.095], [0.052, 0.06]] : [[0.008, 0.23], [0.017, 0.15], [0.029, 0.1], [0.046, 0.065]];
+    for (const [t, g] of taps) add(x, reflection, t * (arena ? 1.35 : 1), g * (escape ? 0.8 : 1));
+    out.push(fadeOut(x, 0.045));
   }
   return out;
-};
+}
+R.ir_maze = () => roomIR('maze');
+R.ir_arena = () => roomIR('arena');
+R.ir_escape = () => roomIR('escape');
 
 // ------------------------------------------------------------------ bank
 const COUNTS = {
   kn_swing: 3, kn_heavy: 2, kn_flesh: 2, kn_wall: 2, kn_draw: 1,
   gr_pin: 1, gr_spoon: 1, gr_bounce: 3, gr_throw: 1, gr_boom: 2, gr_far: 1,
   im_flesh: 3, im_head: 2, im_plate: 2, im_wall: 4, im_floor: 3, im_ceil: 2, whiz: 3,
-  st_walk: 6, st_run: 5, st_land: 2, gear: 4, cloth: 3, sh_brass: 4, sh_hull: 2,
+  st_walk: 8, st_run: 8, st_crouch: 8, st_land: 3, st_walk_concrete: 8, st_run_concrete: 8, st_crouch_concrete: 8, st_land_concrete: 3,
+  gear: 4, cloth: 3, sh_brass: 4, sh_hull: 2,
   mag_out_p: 1, mag_in_p: 1, slide_rel: 1, slide_rack: 1, mag_out_r: 1, mag_in_r: 1, ch_pull: 1, ch_rel: 1, bolt_catch: 1, mag_tap: 1,
   sh_insert: 3, pump_back: 1, pump_fwd: 1, rv_open: 1, rv_eject: 1, rv_load: 1, rv_close: 1,
   bolt_up: 1, bolt_back: 1, bolt_fwd: 1, bolt_down: 1, dry: 1, mode: 1, deploy_light: 1, deploy_heavy: 1, holster: 1, inspect: 1,
   ui_hit: 2, ui_head: 1, ui_armor: 1, ui_kill: 1, ui_killhs: 1, ui_streak: 1, ui_pickup: 1, ui_crate: 1, ui_beep: 1, ui_click: 1, ui_hover: 1, ui_toast: 1, ui_end: 1,
   hurt: 3, hurt_head: 1, heart: 1, breath: 2, death: 1,
-  amb_thud: 1, amb_creak: 1, amb_steps: 1, amb_knock: 1, amb_drone: 1, amb_pop: 1, amb_scream: 1, ir: 1,
+  amb_thud: 1, amb_creak: 1, amb_steps: 1, amb_knock: 1, amb_drone: 1, amb_pop: 1, amb_scream: 1, ir_maze: 1, ir_arena: 1, ir_escape: 1,
   it_gun: 3, it_box: 2, it_soft: 2, it_cash: 2, it_bottle: 2, ui_cash: 1, ui_nope: 1, att_on: 1, vend: 1, vend_hum: 1,
 };
 const SUPPRESSIBLE = ['pistol', 'smg', 'rifle', 'm4', 'sniper'];
@@ -474,11 +530,14 @@ export function soundList() {
 export function synthOne(name, variant, sampleRate) {
   SR = sampleRate;
   rnd = mulberry32(hash(name) + variant * 7919);
-  const m = /^(fp|np|fr)_(\w+)$/.exec(name);
-  if (m) return gunshot(m[2], m[1] === 'fp' ? 'fp' : m[1] === 'np' ? 'near' : 'far');
-  const s = /^(sp|sn)_(\w+)$/.exec(name);
-  if (s) return supshot(s[2], s[1] === 'sp');
-  return R[name]();
+  let out;
+  const m = /^(fp|np|fr)_(\w+)$/.exec(name), s = /^(sp|sn)_(\w+)$/.exec(name);
+  if (m && GUNS[m[2]]) out = gunshot(m[2], m[1] === 'fp' ? 'fp' : m[1] === 'np' ? 'near' : 'far');
+  else if (s && GUNS[s[2]]) out = supshot(s[2], s[1] === 'sp');
+  else if (R[name]) out = R[name](variant);
+  else throw new Error('Unknown sound recipe: ' + name);
+  const chs = finishChannels(Array.isArray(out) ? out : [out], 0.92);
+  return Array.isArray(out) ? chs : chs[0];
 }
 
 export function synthBank(sampleRate, onProgress) {

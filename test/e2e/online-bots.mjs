@@ -52,8 +52,31 @@ try {
   await page.waitForFunction(() => window.__game?.state === 'game', null, { timeout: 90000 });
   await waitForServer(() => srv.core.onlineBotCount === 10);
   assert.equal([...srv.core.players.values()].filter((p) => p.bot).length, 10);
+
+  // The human creature has no firearm slot; the HUD must keep rendering and melee must remain usable.
+  await page.evaluate(() => window.__game.quitToMenu());
+  await waitForServer(() => [...srv.core.players.values()].every((p) => p.bot));
+  await page.click('#nav button[data-p="online"]');
+  await page.waitForFunction(() => !document.getElementById('onlineMode').disabled);
+  await page.selectOption('#onlineMode', 'escape');
+  await page.selectOption('#onlineRole', 'monster');
+  await page.locator('#onlineBots').focus();
+  await page.locator('#onlineBots').press('Home');
+  await page.click('#btnOnline');
+  await page.waitForFunction(() => window.__game?.state === 'game' && window.__game.me.role === 'monster', null, { timeout: 90000 });
+  await page.locator('#pause:not(.hidden) #btnResume, body:has(#pause.hidden) #view').click();
+  await page.waitForFunction(() => window.__game.locked);
+  const creature = [...srv.core.players.values()].find((p) => !p.bot);
+  assert.equal(creature.role, 'monster');
+  assert.equal(await page.evaluate(() => window.__game.me.inv.secondary), null);
+  await page.mouse.down();
+  await waitForServer(() => creature.lastSwing >= creature.spawnT);
+  await page.mouse.up();
+  assert.equal(creature.weapon, 'knife');
+  assert.equal(srv.core.onlineBotCount, 0);
+  assert.equal(srv.core.escapeState().total, 1, 'an AI survivor makes the solo creature session playable');
   assert.deepEqual(pageErrors, []);
-  console.log('PASS online bot selector: 0 and 10 bots, friend join, locked match, reset after departure');
+  console.log('PASS online selection: 0/10 bots, friend join, occupied settings, reset and playable human creature with no firearm');
 } finally {
   friend?.terminate();
   await browser?.close();
